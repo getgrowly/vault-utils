@@ -26,12 +26,12 @@ The controller can be configured using the following environment variables:
 
 ## Docker Images
 
-Docker images are automatically built and pushed to Docker Hub for each release and main branch.
+Docker images are automatically built and pushed to GitHub Container Registry (ghcr.io) for each release and main branch.
 
 ### Using the Docker Image
 
 ```bash
-docker pull yourusername/vault-utils:latest
+docker pull ghcr.io/getgrowly/vault-utils:latest
 ```
 
 ### Available Tags
@@ -51,7 +51,7 @@ docker run -d \
   -e CHECK_INTERVAL=10 \
   -v /path/to/unseal-keys:/vault/unseal-keys \
   -p 8080:8080 \
-  yourusername/vault-utils:latest
+  ghcr.io/getgrowly/vault-utils:latest
 ```
 
 ### Building Locally
