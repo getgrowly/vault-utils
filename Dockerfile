@@ -6,11 +6,16 @@ RUN apk add --no-cache git
 # Set working directory
 WORKDIR /app
 
+# Clean any existing files
+RUN rm -rf /app/*
+
 # Copy go mod files
 COPY go.mod ./
 
-# Download dependencies
-RUN go mod download
+# Download dependencies and clean up
+RUN go mod download && \
+    go mod tidy && \
+    rm -rf /go/pkg/mod/cache
 
 # Copy source code
 COPY . .
