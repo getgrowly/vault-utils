@@ -27,10 +27,10 @@ jobs:
         # Debug: Check if token is set (will show as [MASKED] in logs)
         echo "Token is set: $([[ -n $CODECOV_TOKEN ]] && echo "yes" || echo "no")"
         
-        # Download and execute Codecov script with explicit token
+        # Download and execute Codecov script with explicit token and repository slug
         curl -s https://codecov.io/bash > codecov.sh
         chmod +x codecov.sh
-        ./codecov.sh -B main -f coverage.txt -Z
+        ./codecov.sh -B main -f coverage.txt -Z -r getgrowly/vault-utils
 
   lint:
     runs-on: ubuntu-latest
