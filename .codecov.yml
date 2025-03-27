@@ -1,0 +1,26 @@
+comment: false
+
+coverage:
+  status:
+    project:
+      default:
+        target: 80%
+        threshold: 1%
+    patch:
+      default:
+        target: 80%
+        threshold: 1%
+
+ignore:
+  - "*.test.go"
+  - "*.gen.go"
+  - "*.pb.go"
+  - "*.mock.go"
+  - "*.test"
+  - "*.out"
+  - "*.mod"
+  - "*.sum"
+  - "vendor/*"
+  - ".git/*"
+  - ".github/*"
+  - "test/*" 
