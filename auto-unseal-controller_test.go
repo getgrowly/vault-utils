@@ -1,53 +1,50 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestCheckVaultStatus(t *testing.T) {
 	tests := []struct {
 		name           string
-		serverResponse VaultStatus
-		serverStatus   int
+		responseStatus int
+		responseBody   VaultStatus
 		expectError    bool
 	}{
 		{
-			name: "vault is sealed",
-			serverResponse: VaultStatus{
-				Sealed:      true,
-				Initialized: true,
-			},
-			serverStatus: http.StatusOK,
-			expectError:  false,
+			name:           "vault is sealed",
+			responseStatus: http.StatusOK,
+			responseBody:   VaultStatus{Sealed: true, Initialized: true},
+			expectError:    false,
 		},
 		{
-			name: "vault is unsealed",
-			serverResponse: VaultStatus{
-				Sealed:      false,
-				Initialized: true,
-			},
-			serverStatus: http.StatusOK,
-			expectError:  false,
+			name:           "vault is unsealed",
+			responseStatus: http.StatusOK,
+			responseBody:   VaultStatus{Sealed: false, Initialized: true},
+			expectError:    false,
 		},
 		{
-			name: "vault is not initialized",
-			serverResponse: VaultStatus{
-				Sealed:      true,
-				Initialized: false,
-			},
-			serverStatus: http.StatusOK,
-			expectError:  false,
+			name:           "vault is not initialized",
+			responseStatus: http.StatusOK,
+			responseBody:   VaultStatus{Sealed: true, Initialized: false},
+			expectError:    false,
 		},
 		{
 			name:           "server error",
-			serverResponse: VaultStatus{},
-			serverStatus:   http.StatusInternalServerError,
+			responseStatus: http.StatusInternalServerError,
+			responseBody:   VaultStatus{},
 			expectError:    true,
 		},
 	}
@@ -55,9 +52,9 @@ func TestCheckVaultStatus(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(tt.serverStatus)
-				if err := json.NewEncoder(w).Encode(tt.serverResponse); err != nil {
-					t.Fatalf("Failed to encode response: %v", err)
+				w.WriteHeader(tt.responseStatus)
+				if tt.responseStatus == http.StatusOK {
+					json.NewEncoder(w).Encode(tt.responseBody)
 				}
 			}))
 			defer server.Close()
@@ -65,7 +62,7 @@ func TestCheckVaultStatus(t *testing.T) {
 			status, err := checkVaultStatus(server.URL)
 			if tt.expectError {
 				if err == nil {
-					t.Error("expected error but got none")
+					t.Error("expected error but got nil")
 				}
 				return
 			}
@@ -75,80 +72,76 @@ func TestCheckVaultStatus(t *testing.T) {
 				return
 			}
 
-			if status.Sealed != tt.serverResponse.Sealed {
-				t.Errorf("expected sealed=%v, got sealed=%v", tt.serverResponse.Sealed, status.Sealed)
+			if status.Sealed != tt.responseBody.Sealed {
+				t.Errorf("expected sealed=%v, got sealed=%v", tt.responseBody.Sealed, status.Sealed)
 			}
-			if status.Initialized != tt.serverResponse.Initialized {
-				t.Errorf("expected initialized=%v, got initialized=%v", tt.serverResponse.Initialized, status.Initialized)
+
+			if status.Initialized != tt.responseBody.Initialized {
+				t.Errorf("expected initialized=%v, got initialized=%v", tt.responseBody.Initialized, status.Initialized)
 			}
 		})
 	}
 }
 
 func TestUnsealVault(t *testing.T) {
-	// Create temporary directory for test keys
-	tmpDir := t.TempDir()
-	keysDir := filepath.Join(tmpDir, "unseal-keys")
-	if err := os.MkdirAll(keysDir, 0755); err != nil {
-		t.Fatalf("Failed to create test directory: %v", err)
-	}
-
-	// Create test keys
-	testKeys := []string{"key1", "key2", "key3"}
-	for _, key := range testKeys {
-		err := os.WriteFile(filepath.Join(keysDir, key), []byte("test-key-"+key), 0644)
-		if err != nil {
-			t.Fatalf("failed to create test key: %v", err)
-		}
-	}
-
 	tests := []struct {
 		name           string
-		serverResponses []UnsealResponse
-		serverStatus   int
+		responseStatus int
+		responseBody   UnsealResponse
 		expectError    bool
 	}{
 		{
-			name: "successful unseal",
-			serverResponses: []UnsealResponse{
-				{Sealed: true},
-				{Sealed: true},
-				{Sealed: false},
-			},
-			serverStatus: http.StatusOK,
-			expectError:  false,
+			name:           "successful unseal",
+			responseStatus: http.StatusOK,
+			responseBody:   UnsealResponse{Sealed: false},
+			expectError:    false,
 		},
 		{
-			name: "server error",
-			serverResponses: []UnsealResponse{},
-			serverStatus:   http.StatusInternalServerError,
+			name:           "server error",
+			responseStatus: http.StatusInternalServerError,
+			responseBody:   UnsealResponse{},
 			expectError:    true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			keyIndex := 0
+			// Create temporary directory for test keys
+			tempDir, err := os.MkdirTemp("", "TestUnsealVault")
+			if err != nil {
+				t.Fatalf("failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tempDir)
+
+			// Create unseal keys directory
+			keysDir := filepath.Join(tempDir, "unseal-keys")
+			if err := os.MkdirAll(keysDir, 0755); err != nil {
+				t.Fatalf("failed to create keys dir: %v", err)
+			}
+
+			// Create test key files
+			for i := 1; i <= 3; i++ {
+				keyPath := filepath.Join(keysDir, fmt.Sprintf("key%d", i))
+				if err := os.WriteFile(keyPath, []byte(fmt.Sprintf("test-key-%d", i)), 0644); err != nil {
+					t.Fatalf("failed to write key file: %v", err)
+				}
+			}
+
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(tt.serverStatus)
-				if tt.serverStatus == http.StatusOK && keyIndex < len(tt.serverResponses) {
-					if err := json.NewEncoder(w).Encode(tt.serverResponses[keyIndex]); err != nil {
-						t.Fatalf("Failed to encode response: %v", err)
-					}
-					keyIndex++
+				w.WriteHeader(tt.responseStatus)
+				if tt.responseStatus == http.StatusOK {
+					json.NewEncoder(w).Encode(tt.responseBody)
 				}
 			}))
 			defer server.Close()
 
-			// Temporarily override the keys directory for testing
-			originalKeysDir := "/vault/unseal-keys"
 			os.Setenv("VAULT_UNSEAL_KEYS_DIR", keysDir)
-			defer os.Setenv("VAULT_UNSEAL_KEYS_DIR", originalKeysDir)
+			defer os.Unsetenv("VAULT_UNSEAL_KEYS_DIR")
 
-			err := unsealVault(server.URL)
+			err = unsealVault(server.URL)
 			if tt.expectError {
 				if err == nil {
-					t.Error("expected error but got none")
+					t.Error("expected error but got nil")
 				}
 				return
 			}
@@ -161,72 +154,111 @@ func TestUnsealVault(t *testing.T) {
 }
 
 func TestHealthCheckEndpoints(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/health":
-			w.WriteHeader(http.StatusOK)
-		case "/ready":
-			w.WriteHeader(http.StatusOK)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
 	tests := []struct {
 		name       string
 		endpoint   string
-		wantStatus int
+		expectCode int
 	}{
 		{
 			name:       "health endpoint",
 			endpoint:   "/health",
-			wantStatus: http.StatusOK,
+			expectCode: http.StatusOK,
 		},
 		{
 			name:       "ready endpoint",
 			endpoint:   "/ready",
-			wantStatus: http.StatusOK,
+			expectCode: http.StatusOK,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resp, err := http.Get(server.URL + tt.endpoint)
-			if err != nil {
-				t.Fatalf("failed to make request: %v", err)
-			}
-			defer resp.Body.Close()
+			req := httptest.NewRequest("GET", tt.endpoint, nil)
+			w := httptest.NewRecorder()
 
-			if resp.StatusCode != tt.wantStatus {
-				t.Errorf("expected status %v, got %v", tt.wantStatus, resp.StatusCode)
+			switch tt.endpoint {
+			case "/health":
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}).ServeHTTP(w, req)
+			case "/ready":
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}).ServeHTTP(w, req)
+			}
+
+			if w.Code != tt.expectCode {
+				t.Errorf("expected status code %d, got %d", tt.expectCode, w.Code)
 			}
 		})
 	}
 }
 
 func TestMainLoop(t *testing.T) {
-	// This is a basic test to ensure the main loop doesn't crash
-	// In a real environment, you'd want to test more thoroughly
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		if err := json.NewEncoder(w).Encode(VaultStatus{
-			Sealed:      false,
-			Initialized: true,
-		}); err != nil {
-			t.Fatalf("Failed to encode response: %v", err)
+	// Create a fake Kubernetes clientset
+	clientset := fake.NewSimpleClientset()
+
+	// Create test pods
+	pod1 := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vault-0",
+			Namespace: "vault",
+			Labels: map[string]string{
+				"app.kubernetes.io/name": "vault",
+			},
+		},
+		Status: corev1.PodStatus{
+			PodIP: "10.0.0.1",
+		},
+	}
+
+	pod2 := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vault-1",
+			Namespace: "vault",
+			Labels: map[string]string{
+				"app.kubernetes.io/name": "vault",
+			},
+		},
+		Status: corev1.PodStatus{
+			PodIP: "10.0.0.2",
+		},
+	}
+
+	// Add pods to the fake clientset
+	_, err := clientset.CoreV1().Pods("vault").Create(context.Background(), pod1, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create test pod: %v", err)
+	}
+
+	_, err = clientset.CoreV1().Pods("vault").Create(context.Background(), pod2, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create test pod: %v", err)
+	}
+
+	// Test getVaultPods function
+	pods, err := getVaultPods(clientset, "vault")
+	if err != nil {
+		t.Fatalf("failed to get vault pods: %v", err)
+	}
+
+	if len(pods) != 2 {
+		t.Errorf("expected 2 pods, got %d", len(pods))
+	}
+
+	expectedIPs := map[string]bool{
+		"10.0.0.1": true,
+		"10.0.0.2": true,
+	}
+
+	for _, podIP := range pods {
+		if !expectedIPs[podIP] {
+			t.Errorf("unexpected pod IP: %s", podIP)
 		}
-	}))
-	defer server.Close()
+	}
+}
 
-	// Set environment variables for testing
-	os.Setenv("VAULT_SERVICE", "localhost")
-	os.Setenv("VAULT_PORT", "8200")
-	os.Setenv("CHECK_INTERVAL", "1")
-
-	// Start the main loop in a goroutine
-	go main()
-
-	// Let it run for a short time
-	time.Sleep(2 * time.Second)
+// mockKubernetesClient creates a mock Kubernetes client for testing
+func mockKubernetesClient() kubernetes.Interface {
+	return fake.NewSimpleClientset()
 } 

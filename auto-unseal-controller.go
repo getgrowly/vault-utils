@@ -6,7 +6,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -85,9 +84,13 @@ func initializeVault(clientset *kubernetes.Clientset, namespace, vaultAddr strin
 	}
 
 	// Send initialization request
-	resp, err := http.Put(fmt.Sprintf("%s/v1/sys/init", vaultAddr),
-		"application/json",
-		strings.NewReader(string(reqBody)))
+	req, err := http.NewRequest(http.MethodPut, fmt.Sprintf("%s/v1/sys/init", vaultAddr), strings.NewReader(string(reqBody)))
+	if err != nil {
+		return fmt.Errorf("failed to create init request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to initialize Vault: %v", err)
 	}
@@ -200,7 +203,7 @@ func getKubernetesClient() (*kubernetes.Clientset, error) {
 }
 
 // getVaultPods returns a list of all Vault pods in the specified namespace
-func getVaultPods(clientset *kubernetes.Clientset, namespace string) ([]string, error) {
+func getVaultPods(clientset kubernetes.Interface, namespace string) ([]string, error) {
 	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/name=vault",
 	})
