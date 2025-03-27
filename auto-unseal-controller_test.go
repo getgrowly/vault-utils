@@ -91,7 +91,7 @@ func TestUnsealVault(t *testing.T) {
 
 	// Create test keys
 	testKeys := []string{"key1", "key2", "key3"}
-	for i, key := range testKeys {
+	for _, key := range testKeys {
 		err := os.WriteFile(filepath.Join(keysDir, key), []byte("test-key-"+key), 0644)
 		if err != nil {
 			t.Fatalf("failed to create test key: %v", err)

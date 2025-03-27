@@ -35,9 +35,6 @@ func main() {
 		}
 	}
 
-	maxRetries := 5
-	retryDelay := 2 * time.Second
-
 	vaultAddr := fmt.Sprintf("http://%s:%s", vaultService, vaultPort)
 
 	fmt.Printf("Starting Vault auto-unseal controller with check interval: %v\n", checkInterval)
@@ -97,6 +94,10 @@ func checkVaultStatus(vaultAddr string) (*VaultStatus, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("vault health check failed with status: %d", resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
@@ -111,8 +112,13 @@ func checkVaultStatus(vaultAddr string) (*VaultStatus, error) {
 }
 
 func unsealVault(vaultAddr string) error {
+	// Get keys directory from environment or use default
+	keysDir := os.Getenv("VAULT_UNSEAL_KEYS_DIR")
+	if keysDir == "" {
+		keysDir = "/vault/unseal-keys"
+	}
+
 	// Read unseal keys
-	keysDir := "/vault/unseal-keys"
 	keys := make([]string, 3)
 	for i := 1; i <= 3; i++ {
 		keyPath := filepath.Join(keysDir, fmt.Sprintf("key%d", i))
@@ -134,6 +140,10 @@ func unsealVault(vaultAddr string) error {
 			return fmt.Errorf("error applying unseal key %d: %v", i+1, err)
 		}
 		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("vault unseal failed with status: %d", resp.StatusCode)
+		}
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
