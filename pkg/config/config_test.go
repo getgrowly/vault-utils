@@ -46,4 +46,4 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.CheckInterval != 10*time.Second {
 		t.Errorf("expected default check interval 10s for invalid input, got %v", cfg.CheckInterval)
 	}
-} 
+}

@@ -119,4 +119,4 @@ func TestCreateAndGetSecret(t *testing.T) {
 	if string(secret.Data["token"]) != rootToken {
 		t.Errorf("expected root token to be %s, got %s", rootToken, string(secret.Data["token"]))
 	}
-} 
+}

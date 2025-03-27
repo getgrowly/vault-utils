@@ -119,7 +119,7 @@ func TestUnsealWithKeysFromDir(t *testing.T) {
 			// Create test key files
 			for i := 1; i <= 3; i++ {
 				keyPath := filepath.Join(keysDir, fmt.Sprintf("key%d", i))
-				if err := os.WriteFile(keyPath, []byte(fmt.Sprintf("test-key-%d", i)), 0644); err != nil {
+				if err := os.WriteFile(keyPath, []byte(fmt.Sprintf("test-key-%d", i)), 0600); err != nil {
 					t.Fatalf("failed to write key file: %v", err)
 				}
 			}
@@ -151,4 +151,4 @@ func TestUnsealWithKeysFromDir(t *testing.T) {
 			}
 		})
 	}
-} 
+}

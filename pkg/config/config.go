@@ -20,8 +20,8 @@ type Config struct {
 func LoadConfig() *Config {
 	cfg := &Config{
 		VaultNamespace: getEnvOrDefault("VAULT_NAMESPACE", "vault"),
-		VaultPort:     getEnvOrDefault("VAULT_PORT", "8200"),
-		CheckInterval: time.Duration(getEnvAsIntOrDefault("CHECK_INTERVAL", 10)) * time.Second,
+		VaultPort:      getEnvOrDefault("VAULT_PORT", "8200"),
+		CheckInterval:  time.Duration(getEnvAsIntOrDefault("CHECK_INTERVAL", 10)) * time.Second,
 	}
 
 	return cfg
@@ -43,4 +43,4 @@ func getEnvAsIntOrDefault(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
-} 
+}

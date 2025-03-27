@@ -114,4 +114,4 @@ func (c *Client) CreateRootTokenSecret(namespace, rootToken string) error {
 	}
 
 	return c.CreateSecret(secret)
-} 
+}

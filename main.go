@@ -113,4 +113,4 @@ func main() {
 
 		time.Sleep(cfg.CheckInterval)
 	}
-} 
+}

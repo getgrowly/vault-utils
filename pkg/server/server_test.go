@@ -92,4 +92,4 @@ func TestHealthCheckEndpoints(t *testing.T) {
 			}
 		})
 	}
-} 
+}

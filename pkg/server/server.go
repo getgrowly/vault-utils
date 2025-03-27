@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/getgrowly/vault-utils/pkg/kubernetes"
 	"github.com/getgrowly/vault-utils/pkg/vault"
@@ -25,12 +26,22 @@ func NewServer(k8sClient *kubernetes.Client, port string) *Server {
 
 // Start starts the HTTP server
 func (s *Server) Start() error {
-	http.HandleFunc("/health", s.handleHealth)
-	http.HandleFunc("/ready", s.handleReady)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/ready", s.handleReady)
 
 	addr := fmt.Sprintf(":%s", s.port)
 	log.Printf("Starting HTTP server on %s", addr)
-	return http.ListenAndServe(addr, nil)
+
+	server := &http.Server{
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  30 * time.Second,
+	}
+
+	return server.ListenAndServe()
 }
 
 // handleHealth handles health check requests
@@ -54,7 +65,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	for _, podIP := range pods {
 		vaultAddr := fmt.Sprintf("http://%s:8200", podIP)
 		vaultClient := vault.NewClient(vaultAddr)
-		
+
 		status, err := vaultClient.CheckStatus()
 		if err != nil || !status.Initialized || status.Sealed {
 			allReady = false
@@ -69,4 +80,4 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Some Vault pods are not ready")
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
-} 
+}

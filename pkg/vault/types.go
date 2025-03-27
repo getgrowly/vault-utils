@@ -36,4 +36,4 @@ const (
 	UnsealKeysSecret = "vault-unseal-keys"
 	// RootTokenSecret is the name of the Kubernetes secret storing the root token
 	RootTokenSecret = "vault-root-token"
-) 
+)
