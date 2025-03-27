@@ -22,6 +22,11 @@ type UnsealResponse struct {
 	Sealed bool `json:"sealed"`
 }
 
+func init() {
+	// Configure log format to include timestamp and file location
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+}
+
 func main() {
 	// Configuration
 	vaultService := os.Getenv("VAULT_SERVICE")
@@ -38,28 +43,38 @@ func main() {
 
 	vaultAddr := fmt.Sprintf("http://%s:%s", vaultService, vaultPort)
 
-	fmt.Printf("Starting Vault auto-unseal controller with check interval: %v\n", checkInterval)
+	log.Printf("Starting Vault auto-unseal controller with configuration:")
+	log.Printf("- Vault Service: %s", vaultService)
+	log.Printf("- Vault Port: %s", vaultPort)
+	log.Printf("- Check Interval: %v", checkInterval)
+	log.Printf("- Vault Address: %s", vaultAddr)
 
 	// Setup HTTP server for health checks
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("Health check request received from %s", r.RemoteAddr)
 		w.WriteHeader(http.StatusOK)
 	})
 
 	http.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("Readiness check request received from %s", r.RemoteAddr)
 		status, err := checkVaultStatus(vaultAddr)
 		if err != nil {
+			log.Printf("Readiness check failed: %v", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
 		if !status.Initialized {
+			log.Printf("Vault is not initialized")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
+		log.Printf("Readiness check passed")
 		w.WriteHeader(http.StatusOK)
 	})
 
 	// Start HTTP server in a goroutine
 	go func() {
+		log.Printf("Starting HTTP server on :8080")
 		if err := http.ListenAndServe(":8080", nil); err != nil {
 			log.Fatalf("Failed to start HTTP server: %v", err)
 		}
@@ -69,23 +84,23 @@ func main() {
 	for {
 		status, err := checkVaultStatus(vaultAddr)
 		if err != nil {
-			fmt.Printf("Error checking Vault status: %v\n", err)
+			log.Printf("Error checking Vault status: %v", err)
 			time.Sleep(checkInterval)
 			continue
 		}
 
 		if !status.Initialized {
-			fmt.Println("Vault is not initialized. Waiting for initialization...")
+			log.Printf("Vault is not initialized. Waiting for initialization...")
 			time.Sleep(checkInterval)
 			continue
 		}
 
 		if status.Sealed {
-			fmt.Println("Vault is sealed. Attempting to unseal...")
+			log.Printf("Vault is sealed. Attempting to unseal...")
 			if err := unsealVault(vaultAddr); err != nil {
-				fmt.Printf("Error unsealing Vault: %v\n", err)
+				log.Printf("Error unsealing Vault: %v", err)
 			} else {
-				fmt.Println("Successfully unsealed Vault!")
+				log.Printf("Successfully unsealed Vault!")
 			}
 		}
 
@@ -94,9 +109,10 @@ func main() {
 }
 
 func checkVaultStatus(vaultAddr string) (*VaultStatus, error) {
+	log.Printf("Checking Vault status at %s", vaultAddr)
 	resp, err := http.Get(fmt.Sprintf("%s/v1/sys/health", vaultAddr))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get Vault health status: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -106,14 +122,15 @@ func checkVaultStatus(vaultAddr string) (*VaultStatus, error) {
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read Vault health response: %v", err)
 	}
 
 	var status VaultStatus
 	if err := json.Unmarshal(body, &status); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse Vault health response: %v", err)
 	}
 
+	log.Printf("Vault status: initialized=%v, sealed=%v", status.Initialized, status.Sealed)
 	return &status, nil
 }
 
@@ -123,11 +140,13 @@ func unsealVault(vaultAddr string) error {
 	if keysDir == "" {
 		keysDir = "/vault/unseal-keys"
 	}
+	log.Printf("Using unseal keys directory: %s", keysDir)
 
 	// Read unseal keys
 	keys := make([]string, 3)
 	for i := 1; i <= 3; i++ {
 		keyPath := filepath.Join(keysDir, fmt.Sprintf("key%d", i))
+		log.Printf("Reading unseal key from: %s", keyPath)
 		key, err := os.ReadFile(keyPath)
 		if err != nil {
 			return fmt.Errorf("error reading unseal key %d: %v", i, err)
@@ -137,6 +156,7 @@ func unsealVault(vaultAddr string) error {
 
 	// Apply each key
 	for i, key := range keys {
+		log.Printf("Applying unseal key %d/3", i+1)
 		resp, err := http.Post(
 			fmt.Sprintf("%s/v1/sys/unseal", vaultAddr),
 			"application/json",
@@ -162,9 +182,9 @@ func unsealVault(vaultAddr string) error {
 		}
 
 		if unsealResp.Sealed {
-			fmt.Printf("Applied key %d, Vault still sealed\n", i+1)
+			log.Printf("Applied key %d/3, Vault still sealed", i+1)
 		} else {
-			fmt.Printf("Applied key %d, Vault unsealed\n", i+1)
+			log.Printf("Applied key %d/3, Vault unsealed successfully", i+1)
 		}
 	}
 
