@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -27,8 +29,8 @@ import (
 type VaultStatus struct {
 	// Sealed indicates whether the Vault is currently sealed.
 	// A sealed Vault cannot process any requests until unsealed.
-	Sealed      bool `json:"sealed"`
-	
+	Sealed bool `json:"sealed"`
+
 	// Initialized indicates whether the Vault has been initialized.
 	// An uninitialized Vault needs to be initialized before it can be unsealed.
 	Initialized bool `json:"initialized"`
@@ -42,11 +44,144 @@ type UnsealResponse struct {
 	Sealed bool `json:"sealed"`
 }
 
+// InitRequest represents the request to initialize Vault
+type InitRequest struct {
+	SecretShares    int `json:"secret_shares"`
+	SecretThreshold int `json:"secret_threshold"`
+}
+
+// InitResponse represents the response from Vault initialization
+type InitResponse struct {
+	Keys       []string `json:"keys"`
+	RootToken  string   `json:"root_token"`
+	KeysBase64 []string `json:"keys_base64"`
+}
+
+const (
+	unsealKeysSecret = "vault-unseal-keys"
+	rootTokenSecret  = "vault-root-token"
+)
+
 // init configures the logging format to include timestamps and file locations
 // for better debugging and monitoring capabilities.
 func init() {
 	// Configure log format to include timestamp and file location
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+}
+
+// initializeVault initializes a new Vault instance and stores the keys in Kubernetes secrets
+func initializeVault(clientset *kubernetes.Clientset, namespace, vaultAddr string) error {
+	log.Printf("Initializing Vault at %s", vaultAddr)
+
+	// Create initialization request
+	initReq := InitRequest{
+		SecretShares:    5,
+		SecretThreshold: 3,
+	}
+
+	reqBody, err := json.Marshal(initReq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal init request: %v", err)
+	}
+
+	// Send initialization request
+	resp, err := http.Put(fmt.Sprintf("%s/v1/sys/init", vaultAddr),
+		"application/json",
+		strings.NewReader(string(reqBody)))
+	if err != nil {
+		return fmt.Errorf("failed to initialize Vault: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("vault initialization failed with status: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read init response: %v", err)
+	}
+
+	var initResp InitResponse
+	if err := json.Unmarshal(body, &initResp); err != nil {
+		return fmt.Errorf("failed to parse init response: %v", err)
+	}
+
+	// Create Kubernetes secret for unseal keys
+	unsealKeysData := make(map[string][]byte)
+	for i, key := range initResp.Keys {
+		unsealKeysData[fmt.Sprintf("key%d", i+1)] = []byte(key)
+	}
+
+	unsealSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      unsealKeysSecret,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/component":     "vault-secrets",
+				"vault.hashicorp.com/secret-type": "unseal-keys",
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: unsealKeysData,
+	}
+
+	// Create Kubernetes secret for root token
+	rootTokenSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      rootTokenSecret,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/component":     "vault-secrets",
+				"vault.hashicorp.com/secret-type": "root-token",
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"token": []byte(initResp.RootToken),
+		},
+	}
+
+	// Create or update the secrets
+	_, err = clientset.CoreV1().Secrets(namespace).Create(context.Background(), unsealSecret, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to create unseal keys secret: %v", err)
+	}
+
+	_, err = clientset.CoreV1().Secrets(namespace).Create(context.Background(), rootTokenSecret, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to create root token secret: %v", err)
+	}
+
+	log.Printf("Successfully initialized Vault and stored secrets")
+
+	// Unseal Vault using the first three keys
+	for i := 0; i < 3; i++ {
+		if err := unsealWithKey(vaultAddr, initResp.Keys[i]); err != nil {
+			return fmt.Errorf("failed to unseal with key %d: %v", i+1, err)
+		}
+	}
+
+	return nil
+}
+
+// unsealWithKey applies a single unseal key to the Vault
+func unsealWithKey(vaultAddr, key string) error {
+	resp, err := http.Post(
+		fmt.Sprintf("%s/v1/sys/unseal", vaultAddr),
+		"application/json",
+		strings.NewReader(fmt.Sprintf(`{"key": "%s"}`, key)),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to apply unseal key: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unseal request failed with status: %d", resp.StatusCode)
+	}
+
+	return nil
 }
 
 // getKubernetesClient creates a Kubernetes client using in-cluster configuration
@@ -184,16 +319,48 @@ func main() {
 			}
 
 			if !status.Initialized {
-				log.Printf("Vault pod %s is not initialized. Waiting for initialization...", vaultAddr)
+				log.Printf("Vault pod %s is not initialized. Attempting initialization...", vaultAddr)
+				if err := initializeVault(clientset, vaultNamespace, vaultAddr); err != nil {
+					log.Printf("Error initializing Vault pod %s: %v", vaultAddr, err)
+					continue
+				}
+				log.Printf("Successfully initialized Vault pod %s", vaultAddr)
 				continue
 			}
 
 			if status.Sealed {
 				log.Printf("Vault pod %s is sealed. Attempting to unseal...", vaultAddr)
-				if err := unsealVault(vaultAddr); err != nil {
-					log.Printf("Error unsealing Vault pod %s: %v", vaultAddr, err)
-				} else {
-					log.Printf("Successfully unsealed Vault pod %s!", vaultAddr)
+				// Try to get unseal keys from Kubernetes secret first
+				secret, err := clientset.CoreV1().Secrets(vaultNamespace).Get(context.Background(), unsealKeysSecret, metav1.GetOptions{})
+				if err != nil {
+					log.Printf("Error getting unseal keys secret: %v", err)
+					// Fall back to environment variable keys
+					if err := unsealVault(vaultAddr); err != nil {
+						log.Printf("Error unsealing Vault pod %s: %v", vaultAddr, err)
+					} else {
+						log.Printf("Successfully unsealed Vault pod %s!", vaultAddr)
+					}
+					continue
+				}
+
+				// Use keys from Kubernetes secret
+				var keys []string
+				for i := 1; i <= 3; i++ {
+					key, ok := secret.Data[fmt.Sprintf("key%d", i)]
+					if !ok {
+						log.Printf("Key %d not found in secret", i)
+						continue
+					}
+					keys = append(keys, string(key))
+				}
+
+				// Apply each key
+				for i, key := range keys {
+					if err := unsealWithKey(vaultAddr, key); err != nil {
+						log.Printf("Error applying key %d to pod %s: %v", i+1, vaultAddr, err)
+						break
+					}
+					log.Printf("Successfully applied key %d to pod %s", i+1, vaultAddr)
 				}
 			} else {
 				log.Printf("Vault pod %s is unsealed and healthy", vaultAddr)
