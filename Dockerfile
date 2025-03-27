@@ -1,8 +1,8 @@
 FROM golang:1.21-alpine AS builder
 
 WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
+COPY go.mod ./
+RUN go mod tidy
 COPY auto-unseal-controller.go .
 RUN go build -o auto-unseal
 
