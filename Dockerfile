@@ -1,26 +1,28 @@
 FROM golang:1.21-alpine AS builder
 
 # Install build dependencies
-RUN apk add --no-cache git
+RUN apk add --no-cache git build-base zstd
 
 # Set working directory
 WORKDIR /app
 
-# Clean any existing files
-RUN rm -rf /app/*
+# Set permissions for go mod cache
+RUN mkdir -p /go/pkg/mod && \
+    chmod -R 777 /go/pkg/mod && \
+    chmod -R 777 /go
 
 # Copy go mod files
 COPY go.mod ./
 
 # Download dependencies and clean up
-RUN go mod download && \
-    go mod tidy && \
-    rm -rf /go/pkg/mod/cache
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download && \
+    go mod tidy
 
 # Copy source code
 COPY . .
 
-# Build the binary
+# Build the binary with proper permissions
 RUN CGO_ENABLED=0 GOOS=linux go build -o vault-utils -ldflags="-w -s" .
 
 # Create final minimal image
