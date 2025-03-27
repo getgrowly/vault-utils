@@ -1,6 +1,11 @@
+// Package main implements a Vault auto-unseal controller that automatically unseals
+// HashiCorp Vault instances by monitoring their health status and applying unseal keys
+// when necessary. The controller provides health and readiness endpoints for Kubernetes
+// integration and supports configurable check intervals.
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,27 +16,90 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
+// VaultStatus represents the health status of a Vault instance.
+// It contains information about whether the Vault is sealed and initialized.
 type VaultStatus struct {
+	// Sealed indicates whether the Vault is currently sealed.
+	// A sealed Vault cannot process any requests until unsealed.
 	Sealed      bool `json:"sealed"`
+	
+	// Initialized indicates whether the Vault has been initialized.
+	// An uninitialized Vault needs to be initialized before it can be unsealed.
 	Initialized bool `json:"initialized"`
 }
 
+// UnsealResponse represents the response from a Vault unseal operation.
+// It indicates whether the Vault remains sealed after applying an unseal key.
 type UnsealResponse struct {
+	// Sealed indicates whether the Vault is still sealed after the unseal operation.
+	// This will be false only after all required unseal keys have been applied.
 	Sealed bool `json:"sealed"`
 }
 
+// init configures the logging format to include timestamps and file locations
+// for better debugging and monitoring capabilities.
 func init() {
 	// Configure log format to include timestamp and file location
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 }
 
+// getKubernetesClient creates a Kubernetes client using in-cluster configuration
+func getKubernetesClient() (*kubernetes.Clientset, error) {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get in-cluster config: %v", err)
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Kubernetes client: %v", err)
+	}
+
+	return clientset, nil
+}
+
+// getVaultPods returns a list of all Vault pods in the specified namespace
+func getVaultPods(clientset *kubernetes.Clientset, namespace string) ([]string, error) {
+	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/name=vault",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list Vault pods: %v", err)
+	}
+
+	var podAddresses []string
+	for _, pod := range pods.Items {
+		podIP := pod.Status.PodIP
+		if podIP != "" {
+			podAddresses = append(podAddresses, podIP)
+		}
+	}
+
+	return podAddresses, nil
+}
+
+// main is the entry point of the Vault auto-unseal controller.
+// It performs the following operations:
+// 1. Loads configuration from environment variables
+// 2. Sets up HTTP endpoints for health and readiness checks
+// 3. Starts a monitoring loop to check Vault status and perform unseal operations
 func main() {
 	// Configuration
-	vaultService := os.Getenv("VAULT_SERVICE")
+	vaultNamespace := os.Getenv("VAULT_NAMESPACE")
+	if vaultNamespace == "" {
+		vaultNamespace = "vault"
+	}
 	vaultPort := os.Getenv("VAULT_PORT")
-	
+	if vaultPort == "" {
+		vaultPort = "8200"
+	}
+
 	// Parse check interval from environment variable
 	checkIntervalStr := os.Getenv("CHECK_INTERVAL")
 	checkInterval := 10 * time.Second // default value
@@ -41,13 +109,16 @@ func main() {
 		}
 	}
 
-	vaultAddr := fmt.Sprintf("http://%s:%s", vaultService, vaultPort)
+	// Initialize Kubernetes client
+	clientset, err := getKubernetesClient()
+	if err != nil {
+		log.Fatalf("Failed to create Kubernetes client: %v", err)
+	}
 
 	log.Printf("Starting Vault auto-unseal controller with configuration:")
-	log.Printf("- Vault Service: %s", vaultService)
+	log.Printf("- Vault Namespace: %s", vaultNamespace)
 	log.Printf("- Vault Port: %s", vaultPort)
 	log.Printf("- Check Interval: %v", checkInterval)
-	log.Printf("- Vault Address: %s", vaultAddr)
 
 	// Setup HTTP server for health checks
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -57,19 +128,30 @@ func main() {
 
 	http.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Readiness check request received from %s", r.RemoteAddr)
-		status, err := checkVaultStatus(vaultAddr)
+		pods, err := getVaultPods(clientset, vaultNamespace)
 		if err != nil {
-			log.Printf("Readiness check failed: %v", err)
+			log.Printf("Failed to get Vault pods: %v", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		if !status.Initialized {
-			log.Printf("Vault is not initialized")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
+
+		allReady := true
+		for _, podIP := range pods {
+			vaultAddr := fmt.Sprintf("http://%s:%s", podIP, vaultPort)
+			status, err := checkVaultStatus(vaultAddr)
+			if err != nil || !status.Initialized || status.Sealed {
+				allReady = false
+				break
+			}
 		}
-		log.Printf("Readiness check passed")
-		w.WriteHeader(http.StatusOK)
+
+		if allReady {
+			log.Printf("All Vault pods are ready")
+			w.WriteHeader(http.StatusOK)
+		} else {
+			log.Printf("Some Vault pods are not ready")
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
 	})
 
 	// Start HTTP server in a goroutine
@@ -82,25 +164,39 @@ func main() {
 
 	// Main monitoring loop
 	for {
-		status, err := checkVaultStatus(vaultAddr)
+		pods, err := getVaultPods(clientset, vaultNamespace)
 		if err != nil {
-			log.Printf("Error checking Vault status: %v", err)
+			log.Printf("Error getting Vault pods: %v", err)
 			time.Sleep(checkInterval)
 			continue
 		}
 
-		if !status.Initialized {
-			log.Printf("Vault is not initialized. Waiting for initialization...")
-			time.Sleep(checkInterval)
-			continue
-		}
+		log.Printf("Found %d Vault pods", len(pods))
 
-		if status.Sealed {
-			log.Printf("Vault is sealed. Attempting to unseal...")
-			if err := unsealVault(vaultAddr); err != nil {
-				log.Printf("Error unsealing Vault: %v", err)
+		for _, podIP := range pods {
+			vaultAddr := fmt.Sprintf("http://%s:%s", podIP, vaultPort)
+			log.Printf("Checking Vault pod at %s", vaultAddr)
+
+			status, err := checkVaultStatus(vaultAddr)
+			if err != nil {
+				log.Printf("Error checking Vault status for %s: %v", vaultAddr, err)
+				continue
+			}
+
+			if !status.Initialized {
+				log.Printf("Vault pod %s is not initialized. Waiting for initialization...", vaultAddr)
+				continue
+			}
+
+			if status.Sealed {
+				log.Printf("Vault pod %s is sealed. Attempting to unseal...", vaultAddr)
+				if err := unsealVault(vaultAddr); err != nil {
+					log.Printf("Error unsealing Vault pod %s: %v", vaultAddr, err)
+				} else {
+					log.Printf("Successfully unsealed Vault pod %s!", vaultAddr)
+				}
 			} else {
-				log.Printf("Successfully unsealed Vault!")
+				log.Printf("Vault pod %s is unsealed and healthy", vaultAddr)
 			}
 		}
 
@@ -108,6 +204,16 @@ func main() {
 	}
 }
 
+// checkVaultStatus queries the Vault health endpoint to determine the current
+// status of the Vault instance. It returns a VaultStatus struct containing
+// information about whether the Vault is sealed and initialized.
+//
+// Parameters:
+//   - vaultAddr: The HTTP address of the Vault instance
+//
+// Returns:
+//   - *VaultStatus: The current status of the Vault
+//   - error: Any error that occurred during the health check
 func checkVaultStatus(vaultAddr string) (*VaultStatus, error) {
 	log.Printf("Checking Vault status at %s", vaultAddr)
 	resp, err := http.Get(fmt.Sprintf("%s/v1/sys/health", vaultAddr))
@@ -134,6 +240,18 @@ func checkVaultStatus(vaultAddr string) (*VaultStatus, error) {
 	return &status, nil
 }
 
+// unsealVault attempts to unseal the Vault instance by reading unseal keys from
+// the configured directory and applying them sequentially. The function expects
+// three unseal keys to be present in the keys directory.
+//
+// Parameters:
+//   - vaultAddr: The HTTP address of the Vault instance
+//
+// Returns:
+//   - error: Any error that occurred during the unseal process
+//
+// Environment Variables:
+//   - VAULT_UNSEAL_KEYS_DIR: Directory containing the unseal keys (default: "/vault/unseal-keys")
 func unsealVault(vaultAddr string) error {
 	// Get keys directory from environment or use default
 	keysDir := os.Getenv("VAULT_UNSEAL_KEYS_DIR")
