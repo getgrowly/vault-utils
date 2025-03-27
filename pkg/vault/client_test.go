@@ -48,7 +48,9 @@ func TestCheckStatus(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tt.responseStatus)
 				if tt.responseStatus == http.StatusOK {
-					json.NewEncoder(w).Encode(tt.responseBody)
+					if err := json.NewEncoder(w).Encode(tt.responseBody); err != nil {
+						t.Errorf("failed to encode response: %v", err)
+					}
 				}
 			}))
 			defer server.Close()
@@ -125,7 +127,9 @@ func TestUnsealWithKeysFromDir(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tt.responseStatus)
 				if tt.responseStatus == http.StatusOK {
-					json.NewEncoder(w).Encode(tt.responseBody)
+					if err := json.NewEncoder(w).Encode(tt.responseBody); err != nil {
+						t.Errorf("failed to encode response: %v", err)
+					}
 				}
 			}))
 			defer server.Close()
