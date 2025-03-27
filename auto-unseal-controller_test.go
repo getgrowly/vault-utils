@@ -56,7 +56,9 @@ func TestCheckVaultStatus(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tt.serverStatus)
-				json.NewEncoder(w).Encode(tt.serverResponse)
+				if err := json.NewEncoder(w).Encode(tt.serverResponse); err != nil {
+					t.Fatalf("Failed to encode response: %v", err)
+				}
 			}))
 			defer server.Close()
 
@@ -87,7 +89,9 @@ func TestUnsealVault(t *testing.T) {
 	// Create temporary directory for test keys
 	tmpDir := t.TempDir()
 	keysDir := filepath.Join(tmpDir, "unseal-keys")
-	os.MkdirAll(keysDir, 0755)
+	if err := os.MkdirAll(keysDir, 0755); err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
 
 	// Create test keys
 	testKeys := []string{"key1", "key2", "key3"}
@@ -128,7 +132,9 @@ func TestUnsealVault(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tt.serverStatus)
 				if tt.serverStatus == http.StatusOK && keyIndex < len(tt.serverResponses) {
-					json.NewEncoder(w).Encode(tt.serverResponses[keyIndex])
+					if err := json.NewEncoder(w).Encode(tt.serverResponses[keyIndex]); err != nil {
+						t.Fatalf("Failed to encode response: %v", err)
+					}
 					keyIndex++
 				}
 			}))
@@ -204,10 +210,12 @@ func TestMainLoop(t *testing.T) {
 	// In a real environment, you'd want to test more thoroughly
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(VaultStatus{
+		if err := json.NewEncoder(w).Encode(VaultStatus{
 			Sealed:      false,
 			Initialized: true,
-		})
+		}); err != nil {
+			t.Fatalf("Failed to encode response: %v", err)
+		}
 	}))
 	defer server.Close()
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -57,7 +58,12 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	go http.ListenAndServe(":8080", nil)
+	// Start HTTP server in a goroutine
+	go func() {
+		if err := http.ListenAndServe(":8080", nil); err != nil {
+			log.Fatalf("Failed to start HTTP server: %v", err)
+		}
+	}()
 
 	// Main monitoring loop
 	for {
