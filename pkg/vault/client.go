@@ -38,12 +38,12 @@ func (c *Client) CheckStatus() (*VaultStatus, error) {
 	// 501 - not initialized
 	// 503 - sealed
 	validCodes := map[int]bool{
-		http.StatusOK:                true,  // 200
-		http.StatusTooManyRequests:   true,  // 429
-		http.StatusNotImplemented:    true,  // 501
+		http.StatusOK:                true, // 200
+		http.StatusTooManyRequests:   true, // 429
+		http.StatusNotImplemented:    true, // 501
 		http.StatusServiceUnavailable: true, // 503
-		472: true,
-		473: true,
+		472:                          true,
+		473:                          true,
 	}
 
 	if !validCodes[resp.StatusCode] {
