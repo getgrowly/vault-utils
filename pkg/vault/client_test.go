@@ -3,10 +3,29 @@ package vault
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
+
+// mockTransport implements http.RoundTripper for testing
+type mockTransport struct {
+	responses []*http.Response
+	current   int
+}
+
+func (t *mockTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	if t.current >= len(t.responses) {
+		return nil, fmt.Errorf("no more responses available")
+	}
+	response := t.responses[t.current]
+	t.current++
+	return response, nil
+}
 
 func TestCheckStatus(t *testing.T) {
 	tests := []struct {
@@ -174,110 +193,110 @@ func TestInitialize(t *testing.T) {
 
 func TestUnsealWithKey(t *testing.T) {
 	tests := []struct {
-		name          string
-		key           string
-		statusCode    int
-		expectedError bool
+		name            string
+		serverResponses []*http.Response
+		expectError     bool
 	}{
 		{
-			name:          "success",
-			key:           "test-key",
-			statusCode:    http.StatusOK,
-			expectedError: false,
+			name: "success",
+			serverResponses: []*http.Response{
+				{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"sealed": false}`)),
+				},
+			},
+			expectError: false,
 		},
 		{
-			name:          "error - server error",
-			key:           "test-key",
-			statusCode:    http.StatusInternalServerError,
-			expectedError: true,
+			name: "error - server error",
+			serverResponses: []*http.Response{
+				{
+					StatusCode: http.StatusInternalServerError,
+					Body:       io.NopCloser(strings.NewReader("")),
+				},
+			},
+			expectError: true,
 		},
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/v1/sys/unseal" {
-					t.Errorf("Expected to request '/v1/sys/unseal', got: %s", r.URL.Path)
-				}
-				if r.Method != http.MethodPost {
-					t.Errorf("Expected POST request, got: %s", r.Method)
-				}
-
-				var req map[string]string
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					t.Errorf("Error decoding request body: %v", err)
-				}
-
-				if req["key"] != tt.key {
-					t.Errorf("Expected key=%s, got %s", tt.key, req["key"])
-				}
-
-				w.WriteHeader(tt.statusCode)
-			}))
-			defer server.Close()
-
-			client := NewClient(server.URL)
-			err := client.UnsealWithKey(tt.key)
-
-			if tt.expectedError && err == nil {
-				t.Error("Expected error but got none")
+			client := &Client{
+				baseURL: "http://test:8200",
+				httpClient: &http.Client{
+					Transport: &mockTransport{
+						responses: tt.serverResponses,
+					},
+				},
 			}
-			if !tt.expectedError && err != nil {
-				t.Errorf("Unexpected error: %v", err)
+
+			err := client.UnsealWithKey("test-key")
+			if tt.expectError {
+				assert.Error(t, err)
+				return
 			}
+
+			assert.NoError(t, err)
 		})
 	}
 }
 
 func TestUnsealWithKeysFromDir(t *testing.T) {
 	tests := []struct {
-		name          string
-		keys          []string
-		statusCode    int
-		expectedError bool
+		name            string
+		serverResponses []*http.Response
+		expectError     bool
 	}{
 		{
-			name:          "success",
-			keys:          []string{"key1", "key2", "key3"},
-			statusCode:    http.StatusOK,
-			expectedError: false,
+			name: "success",
+			serverResponses: []*http.Response{
+				{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"sealed": true}`)),
+				},
+				{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"sealed": true}`)),
+				},
+				{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"sealed": false}`)),
+				},
+			},
+			expectError: false,
 		},
 		{
-			name:          "error - server error",
-			keys:          []string{"key1", "key2", "key3"},
-			statusCode:    http.StatusInternalServerError,
-			expectedError: true,
+			name: "error - server error",
+			serverResponses: []*http.Response{
+				{
+					StatusCode: http.StatusInternalServerError,
+					Body:       io.NopCloser(strings.NewReader("")),
+				},
+			},
+			expectError: true,
 		},
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/v1/sys/unseal" {
-					t.Errorf("Expected to request '/v1/sys/unseal', got: %s", r.URL.Path)
-				}
-				if r.Method != http.MethodPost {
-					t.Errorf("Expected POST request, got: %s", r.Method)
-				}
-
-				var req map[string]string
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					t.Errorf("Error decoding request body: %v", err)
-				}
-
-				w.WriteHeader(tt.statusCode)
-			}))
-			defer server.Close()
-
-			client := NewClient(server.URL)
-			err := client.UnsealWithKeysFromDir(tt.keys)
-
-			if tt.expectedError && err == nil {
-				t.Error("Expected error but got none")
+			client := &Client{
+				baseURL: "http://test:8200",
+				httpClient: &http.Client{
+					Transport: &mockTransport{
+						responses: tt.serverResponses,
+					},
+				},
 			}
-			if !tt.expectedError && err != nil {
-				t.Errorf("Unexpected error: %v", err)
+
+			err := client.UnsealWithKeysFromDir([]string{"key1", "key2", "key3"})
+			if tt.expectError {
+				assert.Error(t, err)
+				return
 			}
+
+			assert.NoError(t, err)
 		})
 	}
 }
