@@ -30,8 +30,24 @@ func (c *Client) CheckStatus() (*VaultStatus, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("vault health check failed with status: %d", resp.StatusCode)
+	// Valid status codes:
+	// 200 - initialized, unsealed, and active
+	// 429 - unsealed and standby
+	// 472 - disaster recovery mode replication secondary and active
+	// 473 - performance standby
+	// 501 - not initialized
+	// 503 - sealed
+	validCodes := map[int]bool{
+		http.StatusOK:                true,  // 200
+		http.StatusTooManyRequests:   true,  // 429
+		http.StatusNotImplemented:    true,  // 501
+		http.StatusServiceUnavailable: true, // 503
+		472: true,
+		473: true,
+	}
+
+	if !validCodes[resp.StatusCode] {
+		return nil, fmt.Errorf("vault health check failed with unexpected status: %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)

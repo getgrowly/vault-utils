@@ -67,17 +67,22 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		vaultClient := vault.NewClient(vaultAddr)
 
 		status, err := vaultClient.CheckStatus()
-		if err != nil || !status.Initialized || status.Sealed {
+		if err != nil {
+			log.Printf("Error checking Vault status for %s: %v", vaultAddr, err)
 			allReady = false
-			break
+			continue
 		}
+
+		// Consider a pod ready if it's running (can respond to health check)
+		// regardless of whether it's sealed or not
+		log.Printf("Vault pod %s status: initialized=%v, sealed=%v", vaultAddr, status.Initialized, status.Sealed)
 	}
 
 	if allReady {
-		log.Printf("All Vault pods are ready")
+		log.Printf("All Vault pods are running")
 		w.WriteHeader(http.StatusOK)
 	} else {
-		log.Printf("Some Vault pods are not ready")
+		log.Printf("Some Vault pods are not running")
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 }
