@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/getgrowly/vault-utils/pkg/kubernetes"
+	"github.com/getgrowly/vault-utils/pkg/vault"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -23,6 +25,7 @@ func TestHealthCheckEndpoints(t *testing.T) {
 			Namespace: "vault",
 			Labels: map[string]string{
 				"app.kubernetes.io/name": "vault",
+				"component":              "server",
 			},
 		},
 		Status: corev1.PodStatus{
@@ -36,6 +39,7 @@ func TestHealthCheckEndpoints(t *testing.T) {
 			Namespace: "vault",
 			Labels: map[string]string{
 				"app.kubernetes.io/name": "vault",
+				"component":              "server",
 			},
 		},
 		Status: corev1.PodStatus{
@@ -54,6 +58,22 @@ func TestHealthCheckEndpoints(t *testing.T) {
 		t.Fatalf("failed to create test pod: %v", err)
 	}
 
+	// Create a test HTTP server to mock Vault responses
+	vaultServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/sys/health" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		// Return a sealed status
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(vault.VaultStatus{
+			Sealed:      true,
+			Initialized: true,
+		})
+	}))
+	defer vaultServer.Close()
+
 	// Create Kubernetes client
 	k8sClient := kubernetes.NewClientWithInterface(clientset)
 	srv := NewServer(k8sClient, "8080")
@@ -71,7 +91,7 @@ func TestHealthCheckEndpoints(t *testing.T) {
 		{
 			name:       "ready endpoint",
 			endpoint:   "/ready",
-			expectCode: http.StatusServiceUnavailable, // Vault pods exist but can't be reached
+			expectCode: http.StatusServiceUnavailable, // Vault pods exist but are sealed
 		},
 	}
 

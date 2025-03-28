@@ -20,6 +20,7 @@ func TestGetVaultPods(t *testing.T) {
 			Namespace: "vault",
 			Labels: map[string]string{
 				"app.kubernetes.io/name": "vault",
+				"component":              "server",
 			},
 		},
 		Status: corev1.PodStatus{
@@ -33,10 +34,25 @@ func TestGetVaultPods(t *testing.T) {
 			Namespace: "vault",
 			Labels: map[string]string{
 				"app.kubernetes.io/name": "vault",
+				"component":              "server",
 			},
 		},
 		Status: corev1.PodStatus{
 			PodIP: "10.0.0.2",
+		},
+	}
+
+	// Add a pod that shouldn't be selected
+	pod3 := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vault-auto-unseal",
+			Namespace: "vault",
+			Labels: map[string]string{
+				"app.kubernetes.io/name": "vault",
+			},
+		},
+		Status: corev1.PodStatus{
+			PodIP: "10.0.0.3",
 		},
 	}
 
@@ -47,6 +63,11 @@ func TestGetVaultPods(t *testing.T) {
 	}
 
 	_, err = clientset.CoreV1().Pods("vault").Create(context.Background(), pod2, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create test pod: %v", err)
+	}
+
+	_, err = clientset.CoreV1().Pods("vault").Create(context.Background(), pod3, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create test pod: %v", err)
 	}
