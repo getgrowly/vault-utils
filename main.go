@@ -65,10 +65,35 @@ func unsealVault(vaultClient *vault.Client, kubeClient *kubernetes.Client, confi
 		return fmt.Errorf("error getting unseal keys secret: %v", err)
 	}
 
-	for key := range unsealSecret.Data {
-		if err := vaultClient.UnsealWithKey(string(unsealSecret.Data[key])); err != nil {
-			return fmt.Errorf("error unsealing Vault with key %s: %v", key, err)
+	// Sort keys to ensure consistent order
+	var keys []string
+	for i := 1; i <= len(unsealSecret.Data); i++ {
+		key := fmt.Sprintf("key%d", i)
+		if keyData, exists := unsealSecret.Data[key]; exists {
+			keys = append(keys, string(keyData))
 		}
+	}
+
+	if len(keys) == 0 {
+		return fmt.Errorf("no unseal keys found in secret")
+	}
+
+	// Try unsealing with each key
+	for _, key := range keys {
+		if err := vaultClient.UnsealWithKey(key); err != nil {
+			log.Printf("Warning: Failed to unseal with key: %v", err)
+			continue
+		}
+	}
+
+	// Check final status
+	status, err := vaultClient.CheckStatus()
+	if err != nil {
+		return fmt.Errorf("error checking final status: %v", err)
+	}
+
+	if status.Sealed {
+		return fmt.Errorf("vault is still sealed after attempting to unseal")
 	}
 
 	return nil

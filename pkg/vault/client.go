@@ -100,6 +100,16 @@ func (c *Client) UnsealWithKey(key string) error {
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
+	var unsealResp UnsealResponse
+	if err := json.NewDecoder(resp.Body).Decode(&unsealResp); err != nil {
+		return fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// If the vault is still sealed, this is not an error - it just means we need more keys
+	if unsealResp.Sealed {
+		return nil
+	}
+
 	return nil
 }
 
