@@ -33,8 +33,11 @@ func initializeVault(vaultClient *vault.Client, kubeClient *kubernetes.Client, c
 		},
 	}
 
-	if err := kubeClient.CreateSecret(rootTokenSecret); err != nil {
-		return fmt.Errorf("error storing root token: %v", err)
+	// Try to update existing secret first, if it fails create a new one
+	if err := kubeClient.UpdateSecret(rootTokenSecret); err != nil {
+		if err := kubeClient.CreateSecret(rootTokenSecret); err != nil {
+			return fmt.Errorf("error storing root token: %v", err)
+		}
 	}
 
 	unsealKeys := make(map[string][]byte)
@@ -50,8 +53,11 @@ func initializeVault(vaultClient *vault.Client, kubeClient *kubernetes.Client, c
 		Data: unsealKeys,
 	}
 
-	if err := kubeClient.CreateSecret(unsealKeysSecret); err != nil {
-		return fmt.Errorf("error storing unseal keys: %v", err)
+	// Try to update existing secret first, if it fails create a new one
+	if err := kubeClient.UpdateSecret(unsealKeysSecret); err != nil {
+		if err := kubeClient.CreateSecret(unsealKeysSecret); err != nil {
+			return fmt.Errorf("error storing unseal keys: %v", err)
+		}
 	}
 
 	log.Printf("Successfully initialized Vault and stored secrets")
@@ -80,8 +86,8 @@ func unsealVault(vaultClient *vault.Client, kubeClient *kubernetes.Client, confi
 
 	// Try unsealing with each key
 	for _, key := range keys {
-		if err := vaultClient.UnsealWithKey(key); err != nil {
-			log.Printf("Warning: Failed to unseal with key: %v", err)
+		if unsealErr := vaultClient.UnsealWithKey(key); unsealErr != nil {
+			log.Printf("Warning: Failed to unseal with key: %v", unsealErr)
 			continue
 		}
 	}

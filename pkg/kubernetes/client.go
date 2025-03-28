@@ -134,3 +134,9 @@ func (c *Client) CreateRootTokenSecret(namespace, rootToken string) error {
 
 	return c.CreateSecret(secret)
 }
+
+// UpdateSecret updates an existing Kubernetes secret
+func (c *Client) UpdateSecret(secret *corev1.Secret) error {
+	_, err := c.clientset.CoreV1().Secrets(secret.Namespace).Update(context.Background(), secret, metav1.UpdateOptions{})
+	return err
+}
