@@ -1,15 +1,26 @@
 run:
   timeout: 5m
   go: "1.20"
-  skip-dirs:
+
+issues:
+  exclude-dirs:
     - vendor
     - third_party
     - testdata
     - examples
-  skip-files:
+  exclude-files:
     - ".*_test\\.go$"
     - "\\.pb\\.go$"
     - "\\.gen\\.go$"
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+    - path: _test\.go
+      text: "G404: Use of weak random number generator"
+  max-issues-per-linter: 0
+  max-same-issues: 0
 
 linters:
   enable:
@@ -59,24 +70,4 @@ linters-settings:
     multi-func: true
 
 output:
-  format: colored-line-number
-
-issues:
-  exclude-dirs:
-    - vendor
-    - third_party
-    - testdata
-    - examples
-  exclude-files:
-    - ".*_test\\.go$"
-    - "\\.pb\\.go$"
-    - "\\.gen\\.go$"
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-        - gosec
-    - path: _test\.go
-      text: "G404: Use of weak random number generator"
-  max-issues-per-linter: 0
-  max-same-issues: 0 
+  format: colored-line-number 
