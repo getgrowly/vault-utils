@@ -3,11 +3,15 @@ package kubernetes
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // Client represents a Kubernetes client for managing Kubernetes operations
@@ -15,11 +19,23 @@ type Client struct {
 	clientset kubernetes.Interface
 }
 
-// NewClient creates a new Kubernetes client using in-cluster configuration
+// NewClient creates a new Kubernetes client using in-cluster configuration or local kubeconfig
 func NewClient() (*Client, error) {
+	// Try in-cluster config first
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get in-cluster config: %v", err)
+		// Fall back to kubeconfig
+		kubeconfig := os.Getenv("KUBECONFIG")
+		if kubeconfig == "" {
+			if home := os.Getenv("HOME"); home != "" {
+				kubeconfig = filepath.Join(home, ".kube", "config")
+			}
+		}
+		
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get kubeconfig: %v", err)
+		}
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
@@ -38,7 +54,7 @@ func NewClientWithInterface(clientset kubernetes.Interface) *Client {
 // GetVaultPods returns a list of all Vault pods in the specified namespace
 func (c *Client) GetVaultPods(namespace string) ([]string, error) {
 	pods, err := c.clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/name=vault",
+		LabelSelector: "app.kubernetes.io/name=vault,component=server",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list Vault pods: %v", err)
@@ -46,9 +62,9 @@ func (c *Client) GetVaultPods(namespace string) ([]string, error) {
 
 	var podAddresses []string
 	for _, pod := range pods.Items {
-		podIP := pod.Status.PodIP
-		if podIP != "" {
-			podAddresses = append(podAddresses, podIP)
+		if pod.Status.PodIP != "" {
+			log.Printf("Found Vault pod %s with IP %s", pod.Name, pod.Status.PodIP)
+			podAddresses = append(podAddresses, pod.Status.PodIP)
 		}
 	}
 
