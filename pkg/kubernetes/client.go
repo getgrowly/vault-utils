@@ -61,6 +61,7 @@ func (c *Client) GetVaultPods(namespace string) ([]string, error) {
 	}
 
 	var podAddresses []string
+
 	for _, pod := range pods.Items {
 		if pod.Status.PodIP != "" {
 			log.Printf("Found Vault pod %s with IP %s", pod.Name, pod.Status.PodIP)
@@ -77,6 +78,7 @@ func (c *Client) CreateSecret(secret *corev1.Secret) error {
 	if err != nil {
 		return fmt.Errorf("failed to create secret %s: %v", secret.Name, err)
 	}
+
 	return nil
 }
 
@@ -86,6 +88,7 @@ func (c *Client) GetSecret(namespace, name string) (*corev1.Secret, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get secret %s: %v", name, err)
 	}
+
 	return secret, nil
 }
 

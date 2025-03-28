@@ -3,115 +3,79 @@ package vault
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
 func TestCheckStatus(t *testing.T) {
 	tests := []struct {
 		name           string
-		responseStatus int
-		responseBody   VaultStatus
-		expectError    bool
+		statusCode     int
+		responseBody   string
+		expectedError  bool
+		expectedStatus *Status
 	}{
 		{
-			name:           "vault is sealed",
-			responseStatus: http.StatusOK,
-			responseBody:   VaultStatus{Sealed: true, Initialized: true},
-			expectError:    false,
+			name:       "success - initialized and unsealed",
+			statusCode: http.StatusOK,
+			responseBody: `{
+				"initialized": true,
+				"sealed": false
+			}`,
+			expectedError: false,
+			expectedStatus: &Status{
+				Initialized: true,
+				Sealed:      false,
+			},
 		},
 		{
-			name:           "vault is unsealed",
-			responseStatus: http.StatusOK,
-			responseBody:   VaultStatus{Sealed: false, Initialized: true},
-			expectError:    false,
+			name:          "error - API not found",
+			statusCode:    http.StatusNotFound,
+			responseBody:  "",
+			expectedError: true,
 		},
 		{
-			name:           "vault is not initialized",
-			responseStatus: http.StatusNotImplemented,
-			responseBody:   VaultStatus{Sealed: true, Initialized: false},
-			expectError:    false,
-		},
-		{
-			name:           "vault is sealed with 503",
-			responseStatus: http.StatusServiceUnavailable,
-			responseBody:   VaultStatus{Sealed: true, Initialized: true},
-			expectError:    false,
-		},
-		{
-			name:           "vault is in standby",
-			responseStatus: http.StatusTooManyRequests,
-			responseBody:   VaultStatus{Sealed: false, Initialized: true},
-			expectError:    false,
-		},
-		{
-			name:           "vault is DR secondary",
-			responseStatus: 472,
-			responseBody:   VaultStatus{Sealed: false, Initialized: true},
-			expectError:    false,
-		},
-		{
-			name:           "vault is performance standby",
-			responseStatus: 473,
-			responseBody:   VaultStatus{Sealed: false, Initialized: true},
-			expectError:    false,
-		},
-		{
-			name:           "invalid status code",
-			responseStatus: http.StatusBadRequest,
-			responseBody:   VaultStatus{},
-			expectError:    true,
-		},
-		{
-			name:           "invalid response body",
-			responseStatus: http.StatusOK,
-			responseBody:   VaultStatus{},
-			expectError:    false,
+			name:       "error - invalid JSON response",
+			statusCode: http.StatusOK,
+			responseBody: `{
+				"initialized": true,
+				"sealed": invalid
+			}`,
+			expectedError: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/v1/sys/health" {
-					t.Errorf("unexpected path: %s", r.URL.Path)
+				if r.URL.Path != "/v1/sys/seal-status" {
+					t.Errorf("Expected to request '/v1/sys/seal-status', got: %s", r.URL.Path)
 				}
-				w.WriteHeader(tt.responseStatus)
-				if tt.responseStatus != http.StatusBadRequest {
-					if err := json.NewEncoder(w).Encode(tt.responseBody); err != nil {
-						t.Errorf("failed to encode response: %v", err)
-					}
-				} else {
-					// Write invalid JSON for the error case
-					w.Write([]byte("{invalid json"))
+				if r.Method != http.MethodGet {
+					t.Errorf("Expected GET request, got: %s", r.Method)
 				}
+				w.WriteHeader(tt.statusCode)
+				fmt.Fprintln(w, tt.responseBody)
 			}))
 			defer server.Close()
 
 			client := NewClient(server.URL)
 			status, err := client.CheckStatus()
-			if tt.expectError {
-				if err == nil {
-					t.Error("expected error but got nil")
+
+			if tt.expectedError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectedError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if tt.expectedStatus != nil {
+				if status.Initialized != tt.expectedStatus.Initialized {
+					t.Errorf("Expected initialized=%v, got %v", tt.expectedStatus.Initialized, status.Initialized)
 				}
-				return
-			}
-
-			if err != nil {
-				t.Errorf("unexpected error: %v", err)
-				return
-			}
-
-			if status.Sealed != tt.responseBody.Sealed {
-				t.Errorf("expected sealed=%v, got sealed=%v", tt.responseBody.Sealed, status.Sealed)
-			}
-
-			if status.Initialized != tt.responseBody.Initialized {
-				t.Errorf("expected initialized=%v, got initialized=%v", tt.responseBody.Initialized, status.Initialized)
+				if status.Sealed != tt.expectedStatus.Sealed {
+					t.Errorf("Expected sealed=%v, got %v", tt.expectedStatus.Sealed, status.Sealed)
+				}
 			}
 		})
 	}
@@ -119,86 +83,90 @@ func TestCheckStatus(t *testing.T) {
 
 func TestInitialize(t *testing.T) {
 	tests := []struct {
-		name           string
-		responseStatus int
-		responseBody   *InitResponse
-		expectError    bool
+		name          string
+		statusCode    int
+		responseBody  string
+		expectedError bool
+		expectedResp  *InitResponse
 	}{
 		{
-			name:           "successful initialization",
-			responseStatus: http.StatusOK,
-			responseBody: &InitResponse{
-				Keys:       []string{"key1", "key2", "key3", "key4", "key5"},
-				RootToken:  "root-token",
-				KeysBase64: []string{"key1-base64", "key2-base64", "key3-base64", "key4-base64", "key5-base64"},
+			name:       "success",
+			statusCode: http.StatusOK,
+			responseBody: `{
+				"keys": ["key1", "key2", "key3"],
+				"root_token": "root-token"
+			}`,
+			expectedError: false,
+			expectedResp: &InitResponse{
+				Keys:      []string{"key1", "key2", "key3"},
+				RootToken: "root-token",
 			},
-			expectError: false,
 		},
 		{
-			name:           "already initialized",
-			responseStatus: http.StatusBadRequest,
-			responseBody:   nil,
-			expectError:    true,
+			name:          "error - server error",
+			statusCode:    http.StatusInternalServerError,
+			responseBody:  "",
+			expectedError: true,
 		},
 		{
-			name:           "server error",
-			responseStatus: http.StatusInternalServerError,
-			responseBody:   nil,
-			expectError:    true,
+			name:       "error - invalid JSON response",
+			statusCode: http.StatusOK,
+			responseBody: `{
+				"keys": ["key1", "key2", "key3"],
+				"root_token": invalid
+			}`,
+			expectedError: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPut {
-					t.Errorf("expected PUT request, got %s", r.Method)
-				}
 				if r.URL.Path != "/v1/sys/init" {
-					t.Errorf("unexpected path: %s", r.URL.Path)
+					t.Errorf("Expected to request '/v1/sys/init', got: %s", r.URL.Path)
+				}
+				if r.Method != http.MethodPut {
+					t.Errorf("Expected PUT request, got: %s", r.Method)
 				}
 
-				// Verify request body
-				body, err := io.ReadAll(r.Body)
-				if err != nil {
-					t.Errorf("failed to read request body: %v", err)
-				}
 				var req InitRequest
-				if err := json.Unmarshal(body, &req); err != nil {
-					t.Errorf("failed to parse request body: %v", err)
-				}
-				if req.SecretShares != 5 || req.SecretThreshold != 3 {
-					t.Errorf("unexpected request body: %+v", req)
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Errorf("Error decoding request body: %v", err)
 				}
 
-				w.WriteHeader(tt.responseStatus)
-				if tt.responseBody != nil {
-					if err := json.NewEncoder(w).Encode(tt.responseBody); err != nil {
-						t.Errorf("failed to encode response: %v", err)
-					}
+				if req.SecretShares != defaultSecretShares {
+					t.Errorf("Expected secret_shares=%d, got %d", defaultSecretShares, req.SecretShares)
 				}
+				if req.SecretThreshold != defaultSecretThreshold {
+					t.Errorf("Expected secret_threshold=%d, got %d", defaultSecretThreshold, req.SecretThreshold)
+				}
+
+				w.WriteHeader(tt.statusCode)
+				fmt.Fprintln(w, tt.responseBody)
 			}))
 			defer server.Close()
 
 			client := NewClient(server.URL)
 			resp, err := client.Initialize()
-			if tt.expectError {
-				if err == nil {
-					t.Error("expected error but got nil")
+
+			if tt.expectedError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectedError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if tt.expectedResp != nil {
+				if len(resp.Keys) != len(tt.expectedResp.Keys) {
+					t.Errorf("Expected %d keys, got %d", len(tt.expectedResp.Keys), len(resp.Keys))
 				}
-				return
-			}
-
-			if err != nil {
-				t.Errorf("unexpected error: %v", err)
-				return
-			}
-
-			if len(resp.Keys) != 5 {
-				t.Errorf("expected 5 keys, got %d", len(resp.Keys))
-			}
-			if resp.RootToken != tt.responseBody.RootToken {
-				t.Errorf("expected root token %s, got %s", tt.responseBody.RootToken, resp.RootToken)
+				for i := range resp.Keys {
+					if resp.Keys[i] != tt.expectedResp.Keys[i] {
+						t.Errorf("Expected key[%d]=%s, got %s", i, tt.expectedResp.Keys[i], resp.Keys[i])
+					}
+				}
+				if resp.RootToken != tt.expectedResp.RootToken {
+					t.Errorf("Expected root_token=%s, got %s", tt.expectedResp.RootToken, resp.RootToken)
+				}
 			}
 		})
 	}
@@ -206,80 +174,56 @@ func TestInitialize(t *testing.T) {
 
 func TestUnsealWithKey(t *testing.T) {
 	tests := []struct {
-		name           string
-		responseStatus int
-		responseBody   *UnsealResponse
-		expectError    bool
+		name          string
+		key           string
+		statusCode    int
+		expectedError bool
 	}{
 		{
-			name:           "successful unseal",
-			responseStatus: http.StatusOK,
-			responseBody:   &UnsealResponse{Sealed: false},
-			expectError:    false,
+			name:          "success",
+			key:           "test-key",
+			statusCode:    http.StatusOK,
+			expectedError: false,
 		},
 		{
-			name:           "still sealed",
-			responseStatus: http.StatusOK,
-			responseBody:   &UnsealResponse{Sealed: true},
-			expectError:    false,
-		},
-		{
-			name:           "server error",
-			responseStatus: http.StatusInternalServerError,
-			responseBody:   nil,
-			expectError:    true,
-		},
-		{
-			name:           "invalid key",
-			responseStatus: http.StatusBadRequest,
-			responseBody:   nil,
-			expectError:    true,
+			name:          "error - server error",
+			key:           "test-key",
+			statusCode:    http.StatusInternalServerError,
+			expectedError: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPost {
-					t.Errorf("expected POST request, got %s", r.Method)
-				}
 				if r.URL.Path != "/v1/sys/unseal" {
-					t.Errorf("unexpected path: %s", r.URL.Path)
+					t.Errorf("Expected to request '/v1/sys/unseal', got: %s", r.URL.Path)
+				}
+				if r.Method != http.MethodPost {
+					t.Errorf("Expected POST request, got: %s", r.Method)
 				}
 
-				// Verify request body
-				body, err := io.ReadAll(r.Body)
-				if err != nil {
-					t.Errorf("failed to read request body: %v", err)
-				}
 				var req map[string]string
-				if err := json.Unmarshal(body, &req); err != nil {
-					t.Errorf("failed to parse request body: %v", err)
-				}
-				if _, ok := req["key"]; !ok {
-					t.Error("key not found in request body")
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Errorf("Error decoding request body: %v", err)
 				}
 
-				w.WriteHeader(tt.responseStatus)
-				if tt.responseBody != nil {
-					if err := json.NewEncoder(w).Encode(tt.responseBody); err != nil {
-						t.Errorf("failed to encode response: %v", err)
-					}
+				if req["key"] != tt.key {
+					t.Errorf("Expected key=%s, got %s", tt.key, req["key"])
 				}
+
+				w.WriteHeader(tt.statusCode)
 			}))
 			defer server.Close()
 
 			client := NewClient(server.URL)
-			err := client.UnsealWithKey("test-key")
-			if tt.expectError {
-				if err == nil {
-					t.Error("expected error but got nil")
-				}
-				return
-			}
+			err := client.UnsealWithKey(tt.key)
 
-			if err != nil {
-				t.Errorf("unexpected error: %v", err)
+			if tt.expectedError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectedError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
 			}
 		})
 	}
@@ -287,69 +231,52 @@ func TestUnsealWithKey(t *testing.T) {
 
 func TestUnsealWithKeysFromDir(t *testing.T) {
 	tests := []struct {
-		name           string
-		responseStatus int
-		responseBody   UnsealResponse
-		expectError    bool
+		name          string
+		keys          []string
+		statusCode    int
+		expectedError bool
 	}{
 		{
-			name:           "successful unseal",
-			responseStatus: http.StatusOK,
-			responseBody:   UnsealResponse{Sealed: false},
-			expectError:    false,
+			name:          "success",
+			keys:          []string{"key1", "key2", "key3"},
+			statusCode:    http.StatusOK,
+			expectedError: false,
 		},
 		{
-			name:           "server error",
-			responseStatus: http.StatusInternalServerError,
-			responseBody:   UnsealResponse{},
-			expectError:    true,
+			name:          "error - server error",
+			keys:          []string{"key1", "key2", "key3"},
+			statusCode:    http.StatusInternalServerError,
+			expectedError: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create temporary directory for test keys
-			tempDir, err := os.MkdirTemp("", "TestUnsealVault")
-			if err != nil {
-				t.Fatalf("failed to create temp dir: %v", err)
-			}
-			defer os.RemoveAll(tempDir)
-
-			// Create unseal keys directory
-			keysDir := filepath.Join(tempDir, "unseal-keys")
-			if err := os.MkdirAll(keysDir, 0755); err != nil {
-				t.Fatalf("failed to create keys dir: %v", err)
-			}
-
-			// Create test key files
-			for i := 1; i <= 3; i++ {
-				keyPath := filepath.Join(keysDir, fmt.Sprintf("key%d", i))
-				if err := os.WriteFile(keyPath, []byte(fmt.Sprintf("test-key-%d", i)), 0600); err != nil {
-					t.Fatalf("failed to write key file: %v", err)
-				}
-			}
-
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(tt.responseStatus)
-				if tt.responseStatus == http.StatusOK {
-					if err := json.NewEncoder(w).Encode(tt.responseBody); err != nil {
-						t.Errorf("failed to encode response: %v", err)
-					}
+				if r.URL.Path != "/v1/sys/unseal" {
+					t.Errorf("Expected to request '/v1/sys/unseal', got: %s", r.URL.Path)
 				}
+				if r.Method != http.MethodPost {
+					t.Errorf("Expected POST request, got: %s", r.Method)
+				}
+
+				var req map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Errorf("Error decoding request body: %v", err)
+				}
+
+				w.WriteHeader(tt.statusCode)
 			}))
 			defer server.Close()
 
 			client := NewClient(server.URL)
-			err = client.UnsealWithKeysFromDir(keysDir)
-			if tt.expectError {
-				if err == nil {
-					t.Error("expected error but got nil")
-				}
-				return
-			}
+			err := client.UnsealWithKeysFromDir(tt.keys)
 
-			if err != nil {
-				t.Errorf("unexpected error: %v", err)
+			if tt.expectedError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tt.expectedError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
 			}
 		})
 	}

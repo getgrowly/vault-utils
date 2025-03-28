@@ -9,10 +9,69 @@ import (
 	"github.com/getgrowly/vault-utils/pkg/kubernetes"
 	"github.com/getgrowly/vault-utils/pkg/server"
 	"github.com/getgrowly/vault-utils/pkg/vault"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func init() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+}
+
+func initializeVault(vaultClient *vault.Client, kubeClient *kubernetes.Client, config *config.Config) error {
+	resp, err := vaultClient.Initialize()
+	if err != nil {
+		return fmt.Errorf("error initializing Vault: %v", err)
+	}
+
+	rootTokenSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      vault.RootTokenSecret,
+			Namespace: config.VaultNamespace,
+		},
+		Data: map[string][]byte{
+			"token": []byte(resp.RootToken),
+		},
+	}
+
+	if err := kubeClient.CreateSecret(rootTokenSecret); err != nil {
+		return fmt.Errorf("error storing root token: %v", err)
+	}
+
+	unsealKeys := make(map[string][]byte)
+	for i, key := range resp.Keys {
+		unsealKeys[fmt.Sprintf("key%d", i+1)] = []byte(key)
+	}
+
+	unsealKeysSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      vault.UnsealKeysSecret,
+			Namespace: config.VaultNamespace,
+		},
+		Data: unsealKeys,
+	}
+
+	if err := kubeClient.CreateSecret(unsealKeysSecret); err != nil {
+		return fmt.Errorf("error storing unseal keys: %v", err)
+	}
+
+	log.Printf("Successfully initialized Vault and stored secrets")
+
+	return nil
+}
+
+func unsealVault(vaultClient *vault.Client, kubeClient *kubernetes.Client, config *config.Config) error {
+	unsealSecret, err := kubeClient.GetSecret(config.VaultNamespace, vault.UnsealKeysSecret)
+	if err != nil {
+		return fmt.Errorf("error getting unseal keys secret: %v", err)
+	}
+
+	for key := range unsealSecret.Data {
+		if err := vaultClient.UnsealWithKey(string(unsealSecret.Data[key])); err != nil {
+			return fmt.Errorf("error unsealing Vault with key %s: %v", key, err)
+		}
+	}
+
+	return nil
 }
 
 func main() {
@@ -22,10 +81,9 @@ func main() {
 
 	k8sClient, err := kubernetes.NewClient()
 	if err != nil {
-		log.Fatalf("Failed to create Kubernetes client: %v", err)
+		log.Fatalf("Error creating Kubernetes client: %v", err)
 	}
 
-	// Start HTTP server
 	srv := server.NewServer(k8sClient, "8080")
 	go func() {
 		if err := srv.Start(); err != nil {
@@ -37,102 +95,41 @@ func main() {
 		pods, err := k8sClient.GetVaultPods(cfg.VaultNamespace)
 		if err != nil {
 			log.Printf("Error getting Vault pods: %v", err)
-			time.Sleep(cfg.CheckInterval)
+
 			continue
 		}
 
 		if len(pods) == 0 {
-			log.Printf("No Vault pods found in namespace %s", cfg.VaultNamespace)
-			time.Sleep(cfg.CheckInterval)
+			log.Printf("No Vault pods found")
+
 			continue
 		}
 
-		// First, check if any Vault is initialized
-		initialized := false
-		var initResp *vault.InitResponse
-		var initErr error
-
-		for _, podIP := range pods {
-			vaultAddr := fmt.Sprintf("http://%s:%s", podIP, cfg.VaultPort)
+		for _, pod := range pods {
+			vaultAddr := fmt.Sprintf("http://%s:%s", pod, cfg.VaultPort)
 			vaultClient := vault.NewClient(vaultAddr)
 
 			status, err := vaultClient.CheckStatus()
 			if err != nil {
-				log.Printf("Error checking Vault status for %s: %v", vaultAddr, err)
+				log.Printf("Error checking Vault status for pod %s: %v", pod, err)
+
 				continue
 			}
 
-			if status.Initialized {
-				initialized = true
-				break
-			}
-		}
+			if !status.Initialized {
+				if err := initializeVault(vaultClient, k8sClient, cfg); err != nil {
+					log.Printf("Error initializing Vault for pod %s: %v", pod, err)
 
-		// If no Vault is initialized, initialize the first one
-		if !initialized {
-			log.Printf("No initialized Vault found. Initializing first Vault pod...")
-			vaultAddr := fmt.Sprintf("http://%s:%s", pods[0], cfg.VaultPort)
-			vaultClient := vault.NewClient(vaultAddr)
-
-			initResp, initErr = vaultClient.Initialize()
-			if initErr != nil {
-				log.Printf("Error initializing Vault: %v", initErr)
-				time.Sleep(cfg.CheckInterval)
-				continue
-			}
-
-			// Store keys in Kubernetes secrets
-			if err := k8sClient.CreateUnsealKeySecret(cfg.VaultNamespace, initResp.Keys); err != nil {
-				log.Printf("Error storing unseal keys: %v", err)
-				time.Sleep(cfg.CheckInterval)
-				continue
-			}
-			if err := k8sClient.CreateRootTokenSecret(cfg.VaultNamespace, initResp.RootToken); err != nil {
-				log.Printf("Error storing root token: %v", err)
-				time.Sleep(cfg.CheckInterval)
-				continue
-			}
-
-			log.Printf("Successfully initialized Vault and stored secrets")
-		}
-
-		// Get the secrets for unsealing
-		unsealSecret, err := k8sClient.GetSecret(cfg.VaultNamespace, vault.UnsealKeysSecret)
-		if err != nil {
-			log.Printf("Error getting unseal keys secret: %v", err)
-			time.Sleep(cfg.CheckInterval)
-			continue
-		}
-
-		// Try to unseal all Vaults
-		for _, podIP := range pods {
-			vaultAddr := fmt.Sprintf("http://%s:%s", podIP, cfg.VaultPort)
-			vaultClient := vault.NewClient(vaultAddr)
-
-			status, err := vaultClient.CheckStatus()
-			if err != nil {
-				log.Printf("Error checking Vault status for %s: %v", vaultAddr, err)
-				continue
+					continue
+				}
 			}
 
 			if status.Sealed {
-				log.Printf("Vault pod %s is sealed. Attempting to unseal...", vaultAddr)
-				
-				// Use keys from Kubernetes secret
-				for i := 1; i <= 3; i++ {
-					key, ok := unsealSecret.Data[fmt.Sprintf("key%d", i)]
-					if !ok {
-						log.Printf("Key %d not found in secret", i)
-						continue
-					}
-					if err := vaultClient.UnsealWithKey(string(key)); err != nil {
-						log.Printf("Error applying key %d to pod %s: %v", i, vaultAddr, err)
-						break
-					}
-					log.Printf("Successfully applied key %d to pod %s", i, vaultAddr)
+				if err := unsealVault(vaultClient, k8sClient, cfg); err != nil {
+					log.Printf("Error unsealing Vault for pod %s: %v", pod, err)
+
+					continue
 				}
-			} else {
-				log.Printf("Vault pod %s is unsealed and healthy", vaultAddr)
 			}
 		}
 

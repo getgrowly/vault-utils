@@ -10,6 +10,12 @@ import (
 	"github.com/getgrowly/vault-utils/pkg/vault"
 )
 
+const (
+	defaultReadTimeout  = 10 * time.Second
+	defaultWriteTimeout = 10 * time.Second
+	defaultIdleTimeout  = 30 * time.Second
+)
+
 // Server represents the HTTP server for health and readiness checks
 type Server struct {
 	k8sClient *kubernetes.Client
@@ -30,38 +36,47 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/ready", s.handleReady)
 
-	addr := fmt.Sprintf(":%s", s.port)
-	log.Printf("Starting HTTP server on %s", addr)
-
-	server := &http.Server{
-		Addr:         addr,
+	srv := &http.Server{
+		Addr:         fmt.Sprintf(":%s", s.port),
 		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  30 * time.Second,
+		ReadTimeout:  defaultReadTimeout,
+		WriteTimeout: defaultWriteTimeout,
+		IdleTimeout:  defaultIdleTimeout,
 	}
 
-	return server.ListenAndServe()
+	log.Printf("Starting HTTP server on port %s", s.port)
+	return srv.ListenAndServe()
 }
 
 // handleHealth handles health check requests
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	log.Printf("Health check request received from %s", r.RemoteAddr)
 	w.WriteHeader(http.StatusOK)
 }
 
 // handleReady handles readiness check requests
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	log.Printf("Readiness check request received from %s", r.RemoteAddr)
+
+	allReady := true
 
 	pods, err := s.k8sClient.GetVaultPods("vault")
 	if err != nil {
-		log.Printf("Failed to get Vault pods: %v", err)
+		log.Printf("Error getting Vault pods: %v", err)
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
 
-	allReady := true
 	for _, podIP := range pods {
 		vaultAddr := fmt.Sprintf("http://%s:8200", podIP)
 		vaultClient := vault.NewClient(vaultAddr)
@@ -73,16 +88,15 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Consider a pod ready if it's running (can respond to health check)
-		// regardless of whether it's sealed or not
-		log.Printf("Vault pod %s status: initialized=%v, sealed=%v", vaultAddr, status.Initialized, status.Sealed)
+		if status.Sealed {
+			allReady = false
+		}
 	}
 
-	if allReady {
-		log.Printf("All Vault pods are running")
-		w.WriteHeader(http.StatusOK)
-	} else {
-		log.Printf("Some Vault pods are not running")
+	if !allReady {
 		w.WriteHeader(http.StatusServiceUnavailable)
+		return
 	}
+
+	w.WriteHeader(http.StatusOK)
 }

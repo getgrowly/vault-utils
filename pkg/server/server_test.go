@@ -67,10 +67,12 @@ func TestHealthCheckEndpoints(t *testing.T) {
 		}
 		// Return a sealed status
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(vault.VaultStatus{
+		if err := json.NewEncoder(w).Encode(vault.VaultStatus{
 			Sealed:      true,
 			Initialized: true,
-		})
+		}); err != nil {
+			t.Errorf("failed to encode response: %v", err)
+		}
 	}))
 	defer vaultServer.Close()
 

@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+const (
+	defaultCheckInterval = 10 // seconds
+)
+
 // Config represents the application configuration
 type Config struct {
 	// VaultNamespace is the Kubernetes namespace where Vault is running
@@ -21,7 +25,7 @@ func LoadConfig() *Config {
 	cfg := &Config{
 		VaultNamespace: getEnvOrDefault("VAULT_NAMESPACE", "vault"),
 		VaultPort:      getEnvOrDefault("VAULT_PORT", "8200"),
-		CheckInterval:  time.Duration(getEnvAsIntOrDefault("CHECK_INTERVAL", 10)) * time.Second,
+		CheckInterval:  time.Duration(getEnvAsIntOrDefault("CHECK_INTERVAL", defaultCheckInterval)) * time.Second,
 	}
 
 	return cfg
@@ -32,6 +36,7 @@ func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
+
 	return defaultValue
 }
 
@@ -42,5 +47,6 @@ func getEnvAsIntOrDefault(key string, defaultValue int) int {
 			return intValue
 		}
 	}
+
 	return defaultValue
 }
