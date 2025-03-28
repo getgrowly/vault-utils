@@ -17,8 +17,7 @@ linters-settings:
     check-blank: true
 
 output:
-  formats:
-    - colored-line-number
+  format: colored-line-number
 
 issues:
   exclude-rules:

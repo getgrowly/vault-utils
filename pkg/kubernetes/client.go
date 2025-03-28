@@ -31,7 +31,7 @@ func NewClient() (*Client, error) {
 				kubeconfig = filepath.Join(home, ".kube", "config")
 			}
 		}
-		
+
 		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get kubeconfig: %v", err)
