@@ -16,10 +16,10 @@ func init() {
 }
 
 func main() {
-	// Load configuration
 	cfg := config.LoadConfig()
+	log.Printf("Starting Vault auto-unseal controller with config: namespace=%s, port=%s, interval=%v",
+		cfg.VaultNamespace, cfg.VaultPort, cfg.CheckInterval)
 
-	// Initialize Kubernetes client
 	k8sClient, err := kubernetes.NewClient()
 	if err != nil {
 		log.Fatalf("Failed to create Kubernetes client: %v", err)
@@ -33,7 +33,6 @@ func main() {
 		}
 	}()
 
-	// Main monitoring loop
 	for {
 		pods, err := k8sClient.GetVaultPods(cfg.VaultNamespace)
 		if err != nil {
@@ -42,7 +41,16 @@ func main() {
 			continue
 		}
 
-		log.Printf("Found %d Vault pods", len(pods))
+		if len(pods) == 0 {
+			log.Printf("No Vault pods found in namespace %s", cfg.VaultNamespace)
+			time.Sleep(cfg.CheckInterval)
+			continue
+		}
+
+		// First, check if any Vault is initialized
+		initialized := false
+		var initResp *vault.InitResponse
+		var initErr error
 
 		for _, podIP := range pods {
 			vaultAddr := fmt.Sprintf("http://%s:%s", podIP, cfg.VaultPort)
@@ -54,48 +62,65 @@ func main() {
 				continue
 			}
 
-			if !status.Initialized {
-				log.Printf("Vault pod %s is not initialized. Attempting initialization...", vaultAddr)
-				initResp, err := vaultClient.Initialize()
-				if err != nil {
-					log.Printf("Error initializing Vault pod %s: %v", vaultAddr, err)
-					continue
-				}
+			if status.Initialized {
+				initialized = true
+				break
+			}
+		}
 
-				// Store keys in Kubernetes secrets
-				if err := k8sClient.CreateUnsealKeySecret(cfg.VaultNamespace, initResp.Keys); err != nil {
-					log.Printf("Error storing unseal keys: %v", err)
-				}
-				if err := k8sClient.CreateRootTokenSecret(cfg.VaultNamespace, initResp.RootToken); err != nil {
-					log.Printf("Error storing root token: %v", err)
-				}
+		// If no Vault is initialized, initialize the first one
+		if !initialized {
+			log.Printf("No initialized Vault found. Initializing first Vault pod...")
+			vaultAddr := fmt.Sprintf("http://%s:%s", pods[0], cfg.VaultPort)
+			vaultClient := vault.NewClient(vaultAddr)
 
-				// Unseal with the first three keys
-				for i := 0; i < 3; i++ {
-					if err := vaultClient.UnsealWithKey(initResp.Keys[i]); err != nil {
-						log.Printf("Error unsealing with key %d: %v", i+1, err)
-						break
-					}
-				}
+			initResp, initErr = vaultClient.Initialize()
+			if initErr != nil {
+				log.Printf("Error initializing Vault: %v", initErr)
+				time.Sleep(cfg.CheckInterval)
+				continue
+			}
+
+			// Store keys in Kubernetes secrets
+			if err := k8sClient.CreateUnsealKeySecret(cfg.VaultNamespace, initResp.Keys); err != nil {
+				log.Printf("Error storing unseal keys: %v", err)
+				time.Sleep(cfg.CheckInterval)
+				continue
+			}
+			if err := k8sClient.CreateRootTokenSecret(cfg.VaultNamespace, initResp.RootToken); err != nil {
+				log.Printf("Error storing root token: %v", err)
+				time.Sleep(cfg.CheckInterval)
+				continue
+			}
+
+			log.Printf("Successfully initialized Vault and stored secrets")
+		}
+
+		// Get the secrets for unsealing
+		unsealSecret, err := k8sClient.GetSecret(cfg.VaultNamespace, vault.UnsealKeysSecret)
+		if err != nil {
+			log.Printf("Error getting unseal keys secret: %v", err)
+			time.Sleep(cfg.CheckInterval)
+			continue
+		}
+
+		// Try to unseal all Vaults
+		for _, podIP := range pods {
+			vaultAddr := fmt.Sprintf("http://%s:%s", podIP, cfg.VaultPort)
+			vaultClient := vault.NewClient(vaultAddr)
+
+			status, err := vaultClient.CheckStatus()
+			if err != nil {
+				log.Printf("Error checking Vault status for %s: %v", vaultAddr, err)
 				continue
 			}
 
 			if status.Sealed {
 				log.Printf("Vault pod %s is sealed. Attempting to unseal...", vaultAddr)
-				// Try to get unseal keys from Kubernetes secret first
-				secret, err := k8sClient.GetSecret(cfg.VaultNamespace, vault.UnsealKeysSecret)
-				if err != nil {
-					log.Printf("Error getting unseal keys secret: %v", err)
-					// Fall back to environment variable keys
-					if err := vaultClient.UnsealWithKeysFromDir(""); err != nil {
-						log.Printf("Error unsealing Vault pod %s: %v", vaultAddr, err)
-					}
-					continue
-				}
-
+				
 				// Use keys from Kubernetes secret
 				for i := 1; i <= 3; i++ {
-					key, ok := secret.Data[fmt.Sprintf("key%d", i)]
+					key, ok := unsealSecret.Data[fmt.Sprintf("key%d", i)]
 					if !ok {
 						log.Printf("Key %d not found in secret", i)
 						continue
