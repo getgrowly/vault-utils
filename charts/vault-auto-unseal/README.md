@@ -333,6 +333,21 @@ The controller creates and manages these secrets in the Vault namespace:
 | `vault-root-token` | `token` | The Vault root token |
 | `vault-unseal-keys` | `key1`..`key5` | Shamir unseal key shares |
 
+## Testing
+
+Run Helm tests after installation to verify the controller is working:
+
+```bash
+helm test vault-stack -n vault
+```
+
+This runs two test pods:
+
+| Test | Description |
+|------|-------------|
+| `test-health` | Verifies the `/health` endpoint returns `200 OK` |
+| `test-connection` | Verifies TCP connectivity and `/ready` endpoint responsiveness |
+
 ## Upgrading
 
 ```bash

@@ -1,0 +1,105 @@
+name: Helm Chart CI
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'charts/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'charts/**'
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Add HashiCorp Helm repository
+        run: helm repo add hashicorp https://helm.releases.hashicorp.com
+
+      - name: Update Helm dependencies
+        run: helm dependency update charts/vault-auto-unseal
+
+      - name: Lint chart
+        run: helm lint charts/vault-auto-unseal --strict
+
+  template:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Add HashiCorp Helm repository
+        run: helm repo add hashicorp https://helm.releases.hashicorp.com
+
+      - name: Update Helm dependencies
+        run: helm dependency update charts/vault-auto-unseal
+
+      - name: Template with default values
+        run: helm template vault-stack charts/vault-auto-unseal --namespace vault
+
+      - name: Template with Vault disabled
+        run: |
+          helm template vault-auto-unseal charts/vault-auto-unseal \
+            --namespace vault \
+            --set vault.enabled=false
+
+      - name: Template with HA mode
+        run: |
+          helm template vault-stack charts/vault-auto-unseal \
+            --namespace vault \
+            --set vault.server.ha.enabled=true \
+            --set vault.server.ha.replicas=3 \
+            --set vault.server.standalone.enabled=false
+
+      - name: Template with custom controller settings
+        run: |
+          helm template vault-stack charts/vault-auto-unseal \
+            --namespace vault \
+            --set controller.vaultNamespace=custom-ns \
+            --set controller.vaultPort=8201 \
+            --set controller.checkInterval=60
+
+  kubeconform:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Add HashiCorp Helm repository
+        run: helm repo add hashicorp https://helm.releases.hashicorp.com
+
+      - name: Update Helm dependencies
+        run: helm dependency update charts/vault-auto-unseal
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.4/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin kubeconform
+
+      - name: Validate rendered templates against K8s schemas
+        run: |
+          helm template vault-stack charts/vault-auto-unseal --namespace vault \
+            | kubeconform -strict -summary \
+              -kubernetes-version 1.28.0 \
+              -skip CustomResourceDefinition

@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "vault-auto-unseal.fullname" . }}-test-connection"
+  labels:
+    {{- include "vault-auto-unseal.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    - name: connection-check
+      image: busybox:1.36
+      command: ['sh', '-c']
+      args:
+        - |
+          echo "Testing TCP connection to controller service..."
+          nc -z -w5 {{ include "vault-auto-unseal.fullname" . }} {{ .Values.service.port }}
+          if [ $? -eq 0 ]; then
+            echo "Connection to {{ include "vault-auto-unseal.fullname" . }}:{{ .Values.service.port }} PASSED"
+          else
+            echo "Connection to {{ include "vault-auto-unseal.fullname" . }}:{{ .Values.service.port }} FAILED"
+            exit 1
+          fi
+
+          echo ""
+          echo "Testing readiness endpoint..."
+          STATUS=$(wget -q -S -O /dev/null --timeout=5 http://{{ include "vault-auto-unseal.fullname" . }}:{{ .Values.service.port }}/ready 2>&1 | grep "HTTP/" | awk '{print $2}')
+          echo "Readiness endpoint returned HTTP status: $STATUS"
+          # Accept both 200 (all unsealed) and 503 (not yet unsealed) as valid responses
+          if [ "$STATUS" = "200" ] || [ "$STATUS" = "503" ]; then
+            echo "Readiness endpoint is responding (status: $STATUS)"
+            exit 0
+          else
+            echo "Readiness endpoint returned unexpected status"
+            exit 1
+          fi
