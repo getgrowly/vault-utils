@@ -96,28 +96,39 @@ Each key should contain the corresponding unseal key for your Vault instance.
 
 ## Helm Chart
 
-A Helm chart is provided for deploying the controller on Kubernetes. See [charts/vault-auto-unseal/README.md](charts/vault-auto-unseal/README.md) for full documentation.
+A Helm chart is provided for deploying both **HashiCorp Vault** and the auto-unseal controller together. See [charts/vault-auto-unseal/README.md](charts/vault-auto-unseal/README.md) for full documentation.
 
-### Quick Start
+### Quick Start (Vault + Controller)
+
+```bash
+helm dependency update ./charts/vault-auto-unseal
+helm install vault-stack ./charts/vault-auto-unseal \
+  --namespace vault \
+  --create-namespace
+```
+
+### Controller Only (existing Vault)
 
 ```bash
 helm install vault-auto-unseal ./charts/vault-auto-unseal \
   --namespace vault \
-  --create-namespace
+  --set vault.enabled=false \
+  --set controller.vaultNamespace=vault
 ```
 
 ### Custom Configuration
 
 ```bash
-helm install vault-auto-unseal ./charts/vault-auto-unseal \
+helm install vault-stack ./charts/vault-auto-unseal \
   --namespace vault \
   --create-namespace \
-  --set vault.namespace=vault \
-  --set vault.port=8200 \
-  --set vault.checkInterval=30
+  --set controller.checkInterval=30 \
+  --set vault.server.replicas=3 \
+  --set vault.server.ha.enabled=true
 ```
 
 The chart includes:
+- **HashiCorp Vault** as a sub-chart dependency (standalone or HA mode)
 - Deployment with configurable replicas, resources, and probes
 - ServiceAccount with least-privilege RBAC (secrets + pod listing)
 - Service for health check endpoints (`/health`, `/ready`)

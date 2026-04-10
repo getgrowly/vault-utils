@@ -17,12 +17,12 @@ nameOverride: ""
 # -- Override the full release name
 fullnameOverride: ""
 
-# Vault configuration
-vault:
+# Auto-unseal controller configuration
+controller:
   # -- Kubernetes namespace where Vault pods are running
-  namespace: vault
+  vaultNamespace: vault
   # -- Port number where Vault is listening
-  port: "8200"
+  vaultPort: "8200"
   # -- Interval in seconds between Vault status checks
   checkInterval: 10
 
@@ -107,3 +107,90 @@ tolerations: []
 
 # -- Affinity rules for pod scheduling
 affinity: {}
+
+# ------------------------------------------------------------------------------
+# HashiCorp Vault Sub-chart Configuration
+# See: https://developer.hashicorp.com/vault/docs/platform/k8s/helm/configuration
+# ------------------------------------------------------------------------------
+vault:
+  # -- Enable deploying HashiCorp Vault as a dependency
+  enabled: true
+
+  server:
+    # -- Number of Vault server replicas
+    replicas: 1
+
+    # -- Image settings for Vault server
+    image:
+      repository: hashicorp/vault
+      tag: "1.15.4"
+
+    # -- Resource requests and limits for Vault server
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 250m
+      limits:
+        memory: 256Mi
+        cpu: 250m
+
+    # -- Extra labels for Vault server pods (required for auto-unseal discovery)
+    extraLabels:
+      component: server
+
+    # -- Readiness probe for Vault
+    readinessProbe:
+      enabled: true
+      path: "/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204"
+
+    # -- Liveness probe for Vault
+    livenessProbe:
+      enabled: true
+      path: "/v1/sys/health?standbyok=true"
+      initialDelaySeconds: 60
+
+    # -- Data storage configuration
+    dataStorage:
+      enabled: true
+      size: 10Gi
+
+    # -- Standalone mode configuration (default)
+    standalone:
+      enabled: true
+      config: |
+        ui = false
+        listener "tcp" {
+          tls_disable = 1
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+        }
+        storage "file" {
+          path = "/vault/data"
+        }
+
+    # -- HA mode configuration (disabled by default)
+    ha:
+      enabled: false
+      replicas: 3
+      raft:
+        enabled: true
+        setNodeId: true
+        config: |
+          ui = false
+          listener "tcp" {
+            tls_disable = 1
+            address = "[::]:8200"
+            cluster_address = "[::]:8201"
+          }
+          storage "raft" {
+            path = "/vault/data"
+          }
+          service_registration "kubernetes" {}
+
+  # -- Vault UI settings
+  ui:
+    enabled: false
+
+  # -- Injector settings (disable if not needed)
+  injector:
+    enabled: false

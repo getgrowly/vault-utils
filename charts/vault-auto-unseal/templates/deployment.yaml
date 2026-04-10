@@ -36,11 +36,11 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: VAULT_NAMESPACE
-              value: {{ .Values.vault.namespace | quote }}
+              value: {{ .Values.controller.vaultNamespace | quote }}
             - name: VAULT_PORT
-              value: {{ .Values.vault.port | quote }}
+              value: {{ .Values.controller.vaultPort | quote }}
             - name: CHECK_INTERVAL
-              value: {{ .Values.vault.checkInterval | quote }}
+              value: {{ .Values.controller.checkInterval | quote }}
           ports:
             - name: http
               containerPort: 8080

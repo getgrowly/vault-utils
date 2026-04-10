@@ -1,10 +1,24 @@
 
 Vault Auto-Unseal Controller has been deployed!
 
-Configuration:
-  - Vault Namespace: {{ .Values.vault.namespace }}
-  - Vault Port:      {{ .Values.vault.port }}
-  - Check Interval:  {{ .Values.vault.checkInterval }}s
+Controller Configuration:
+  - Vault Namespace: {{ .Values.controller.vaultNamespace }}
+  - Vault Port:      {{ .Values.controller.vaultPort }}
+  - Check Interval:  {{ .Values.controller.checkInterval }}s
+
+{{- if .Values.vault.enabled }}
+
+HashiCorp Vault has been deployed as a dependency.
+{{- if .Values.vault.server.ha.enabled }}
+  - Mode:     HA ({{ .Values.vault.server.ha.replicas }} replicas)
+{{- else }}
+  - Mode:     Standalone
+{{- end }}
+  - Replicas: {{ .Values.vault.server.replicas }}
+
+Vault must be initialized and unsealed after first deployment.
+The auto-unseal controller will handle this automatically.
+{{- end }}
 
 Health check endpoints:
   {{- if contains "NodePort" .Values.service.type }}
@@ -29,7 +43,7 @@ The controller will automatically:
   3. Store root tokens and unseal keys as Kubernetes secrets
   4. Unseal sealed Vault instances
 
-Managed Kubernetes secrets (in {{ .Values.vault.namespace }} namespace):
+Managed Kubernetes secrets (in {{ .Values.controller.vaultNamespace }} namespace):
   - vault-root-token:  Contains the Vault root token
   - vault-unseal-keys: Contains the unseal keys (key1..key5)
 

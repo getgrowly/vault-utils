@@ -16,3 +16,8 @@ sources:
 maintainers:
   - name: getgrowly
     url: https://github.com/getgrowly
+dependencies:
+  - name: vault
+    version: "0.28.1"
+    repository: "https://helm.releases.hashicorp.com"
+    condition: vault.enabled

@@ -3,7 +3,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "vault-auto-unseal.fullname" . }}
-  namespace: {{ .Values.vault.namespace }}
+  namespace: {{ .Values.controller.vaultNamespace }}
   labels:
     {{- include "vault-auto-unseal.labels" . | nindent 4 }}
 rules:
@@ -18,13 +18,13 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ include "vault-auto-unseal.fullname" . }}
-  namespace: {{ .Values.vault.namespace }}
+  namespace: {{ .Values.controller.vaultNamespace }}
   labels:
     {{- include "vault-auto-unseal.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
     name: {{ include "vault-auto-unseal.serviceAccountName" . }}
-    namespace: {{ .Values.vault.namespace }}
+    namespace: {{ .Values.controller.vaultNamespace }}
 roleRef:
   kind: Role
   name: {{ include "vault-auto-unseal.fullname" . }}
