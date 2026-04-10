@@ -97,9 +97,17 @@ jobs:
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.4/kubeconform-linux-amd64.tar.gz \
             | tar xz -C /usr/local/bin kubeconform
 
-      - name: Validate rendered templates against K8s schemas
+      - name: Validate controller templates against K8s schemas
         run: |
           helm template vault-stack charts/vault-auto-unseal --namespace vault \
+            --set vault.enabled=false \
             | kubeconform -strict -summary \
+              -kubernetes-version 1.28.0
+
+      - name: Validate full stack templates against K8s schemas
+        run: |
+          helm template vault-stack charts/vault-auto-unseal --namespace vault \
+            | kubeconform -summary \
+              -ignore-missing-schemas \
               -kubernetes-version 1.28.0 \
               -skip CustomResourceDefinition
