@@ -2,13 +2,13 @@ name: Helm Chart CI
 
 on:
   push:
-    branches: [ main ]
     paths:
       - 'charts/**'
+      - '.github/workflows/helm.yml'
   pull_request:
-    branches: [ main ]
     paths:
       - 'charts/**'
+      - '.github/workflows/helm.yml'
 
 permissions:
   contents: read
