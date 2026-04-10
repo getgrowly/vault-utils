@@ -94,6 +94,35 @@ The controller expects three unseal keys to be present in the `/vault/unseal-key
 
 Each key should contain the corresponding unseal key for your Vault instance.
 
+## Helm Chart
+
+A Helm chart is provided for deploying the controller on Kubernetes. See [charts/vault-auto-unseal/README.md](charts/vault-auto-unseal/README.md) for full documentation.
+
+### Quick Start
+
+```bash
+helm install vault-auto-unseal ./charts/vault-auto-unseal \
+  --namespace vault \
+  --create-namespace
+```
+
+### Custom Configuration
+
+```bash
+helm install vault-auto-unseal ./charts/vault-auto-unseal \
+  --namespace vault \
+  --create-namespace \
+  --set vault.namespace=vault \
+  --set vault.port=8200 \
+  --set vault.checkInterval=30
+```
+
+The chart includes:
+- Deployment with configurable replicas, resources, and probes
+- ServiceAccount with least-privilege RBAC (secrets + pod listing)
+- Service for health check endpoints (`/health`, `/ready`)
+- Security hardening (non-root user, read-only filesystem, dropped capabilities)
+
 ## Security Considerations
 
 - Ensure unseal keys are stored securely and have appropriate permissions

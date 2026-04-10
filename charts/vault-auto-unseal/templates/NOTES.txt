@@ -1,0 +1,37 @@
+
+Vault Auto-Unseal Controller has been deployed!
+
+Configuration:
+  - Vault Namespace: {{ .Values.vault.namespace }}
+  - Vault Port:      {{ .Values.vault.port }}
+  - Check Interval:  {{ .Values.vault.checkInterval }}s
+
+Health check endpoints:
+  {{- if contains "NodePort" .Values.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "vault-auto-unseal.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo "Health: http://$NODE_IP:$NODE_PORT/health"
+  echo "Ready:  http://$NODE_IP:$NODE_PORT/ready"
+  {{- else if contains "LoadBalancer" .Values.service.type }}
+  NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "vault-auto-unseal.fullname" . }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+  echo "Health: http://$SERVICE_IP:{{ .Values.service.port }}/health"
+  echo "Ready:  http://$SERVICE_IP:{{ .Values.service.port }}/ready"
+  {{- else }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "vault-auto-unseal.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  echo "Health: http://127.0.0.1:{{ .Values.service.port }}/health"
+  echo "Ready:  http://127.0.0.1:{{ .Values.service.port }}/ready"
+  {{- end }}
+
+The controller will automatically:
+  1. Discover Vault pods with labels: app.kubernetes.io/name=vault, component=server
+  2. Initialize uninitialized Vault instances
+  3. Store root tokens and unseal keys as Kubernetes secrets
+  4. Unseal sealed Vault instances
+
+Managed Kubernetes secrets (in {{ .Values.vault.namespace }} namespace):
+  - vault-root-token:  Contains the Vault root token
+  - vault-unseal-keys: Contains the unseal keys (key1..key5)
+
+To check controller logs:
+  kubectl logs -f deployment/{{ include "vault-auto-unseal.fullname" . }} -n {{ .Release.Namespace }}

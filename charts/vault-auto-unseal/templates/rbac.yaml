@@ -1,0 +1,32 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "vault-auto-unseal.fullname" . }}
+  namespace: {{ .Values.vault.namespace }}
+  labels:
+    {{- include "vault-auto-unseal.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "list", "watch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "vault-auto-unseal.fullname" . }}
+  namespace: {{ .Values.vault.namespace }}
+  labels:
+    {{- include "vault-auto-unseal.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "vault-auto-unseal.serviceAccountName" . }}
+    namespace: {{ .Values.vault.namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "vault-auto-unseal.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

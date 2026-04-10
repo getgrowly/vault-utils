@@ -1,0 +1,109 @@
+# -- Number of controller replicas
+replicaCount: 1
+
+image:
+  # -- Container image repository
+  repository: ghcr.io/getgrowly/vault-utils
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag (default is the chart appVersion)
+  tag: ""
+
+# -- Image pull secrets for private registries
+imagePullSecrets: []
+
+# -- Override the release name
+nameOverride: ""
+# -- Override the full release name
+fullnameOverride: ""
+
+# Vault configuration
+vault:
+  # -- Kubernetes namespace where Vault pods are running
+  namespace: vault
+  # -- Port number where Vault is listening
+  port: "8200"
+  # -- Interval in seconds between Vault status checks
+  checkInterval: 10
+
+serviceAccount:
+  # -- Whether to create a ServiceAccount
+  create: true
+  # -- Annotations to add to the ServiceAccount
+  annotations: {}
+  # -- The name of the ServiceAccount (generated if not set)
+  name: ""
+
+rbac:
+  # -- Whether to create Role and RoleBinding for secret management
+  create: true
+
+# -- Annotations to add to the pod
+podAnnotations: {}
+
+# -- Labels to add to the pod
+podLabels: {}
+
+# -- Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsGroup: 10001
+
+# -- Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 10001
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  # -- Service type
+  type: ClusterIP
+  # -- Health check service port
+  port: 8080
+
+# -- Resource requests and limits
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+# Liveness probe configuration
+livenessProbe:
+  httpGet:
+    # -- Liveness probe endpoint path
+    path: /health
+    # -- Liveness probe port
+    port: http
+  # -- Initial delay before liveness probe starts
+  initialDelaySeconds: 5
+  # -- Interval between liveness probes
+  periodSeconds: 10
+
+# Readiness probe configuration
+readinessProbe:
+  httpGet:
+    # -- Readiness probe endpoint path
+    path: /ready
+    # -- Readiness probe port
+    port: http
+  # -- Initial delay before readiness probe starts
+  initialDelaySeconds: 5
+  # -- Interval between readiness probes
+  periodSeconds: 10
+
+# -- Node selector constraints
+nodeSelector: {}
+
+# -- Tolerations for pod scheduling
+tolerations: []
+
+# -- Affinity rules for pod scheduling
+affinity: {}
