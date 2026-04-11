@@ -333,6 +333,52 @@ The controller creates and manages these secrets in the Vault namespace:
 | `vault-root-token` | `token` | The Vault root token |
 | `vault-unseal-keys` | `key1`..`key5` | Shamir unseal key shares |
 
+### Accessing Secrets
+
+**Get the root token:**
+
+```bash
+kubectl get secret vault-root-token -n vault -o jsonpath='{.data.token}' | base64 -d
+```
+
+**Use the root token to log in to Vault:**
+
+```bash
+# Store the token in a variable
+export VAULT_TOKEN=$(kubectl get secret vault-root-token -n vault -o jsonpath='{.data.token}' | base64 -d)
+
+# Port-forward Vault and authenticate
+kubectl port-forward svc/vault 8200:8200 -n vault &
+export VAULT_ADDR=http://127.0.0.1:8200
+vault status
+vault token lookup
+```
+
+**Get all unseal keys:**
+
+```bash
+kubectl get secret vault-unseal-keys -n vault -o jsonpath='{.data}' | python3 -c "
+import sys, json, base64
+data = json.load(sys.stdin)
+for k, v in sorted(data.items()):
+    print(f'{k}: {base64.b64decode(v).decode()}')
+"
+```
+
+**Get a single unseal key (e.g. key1):**
+
+```bash
+kubectl get secret vault-unseal-keys -n vault -o jsonpath='{.data.key1}' | base64 -d
+```
+
+**View all secrets as YAML:**
+
+```bash
+kubectl get secret vault-root-token vault-unseal-keys -n vault -o yaml
+```
+
+> **Warning:** Root tokens and unseal keys are highly sensitive. Avoid logging or storing them in plain text. For production, consider revoking the initial root token after configuring Vault and creating proper auth methods.
+
 ## Testing
 
 Run Helm tests after installation to verify the controller is working:
