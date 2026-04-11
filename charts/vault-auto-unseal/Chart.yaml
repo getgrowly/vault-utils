@@ -16,6 +16,14 @@ sources:
 maintainers:
   - name: getgrowly
     url: https://github.com/getgrowly
+icon: https://raw.githubusercontent.com/hashicorp/vault/main/ui/public/vault-logo.svg
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/links: |
+    - name: GitHub
+      url: https://github.com/getgrowly/vault-utils
+    - name: Container Image
+      url: https://ghcr.io/getgrowly/vault-utils
 dependencies:
   - name: vault
     version: "0.28.1"
